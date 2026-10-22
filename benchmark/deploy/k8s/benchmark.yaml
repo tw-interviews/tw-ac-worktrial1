@@ -1,0 +1,249 @@
+# Tool-call throughput benchmark: namespaces, limits, network rules,
+# permissions, and the upstream template and warm pool. Applied by
+# deploy/deploy.sh (which also creates the benchmark's SandboxManager).
+#
+#   toolcall-bench    every arm's sandboxes (SandboxManager's and agent-sandbox's)
+#   toolcall-loadgen  the load generator
+#
+# Node pinning (bench-role=sandbox / bench-role=loadgen) is added by
+# `deploy.sh pin` once the benchmark node groups exist.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: toolcall-bench
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: toolcall-loadgen
+---
+# Sized for ~2048 sandboxes plus pods being created and torn down.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: toolcall-bench
+  namespace: toolcall-bench
+spec:
+  hard:
+    pods: "2400"
+    requests.cpu: "40"
+    requests.memory: 200Gi
+    limits.memory: 400Gi
+---
+# Every arm's sandbox gets the same size unless it says otherwise.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: toolcall-bench
+  namespace: toolcall-bench
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 10m
+        memory: 64Mi
+      default:
+        cpu: 250m
+        memory: 128Mi
+      max:
+        cpu: "1"
+        memory: 512Mi
+---
+# Sandboxes accept connections only from the load generator, on the runtime
+# port; egress is DNS and the public internet, as for real sandboxes. Only
+# enforced if the VPC CNI's network policy agent is enabled.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: toolcall-sandbox-isolation
+  namespace: toolcall-bench
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: toolcall-loadgen
+      ports:
+        - {protocol: TCP, port: 8888}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+---
+# The sandboxmanager arm: the benchmark's SandboxManager (SANDBOX_NAMESPACE=toolcall-bench) runs as the
+# same service account as the real one, with the same rights here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sandbox-manager-sandboxes
+  namespace: toolcall-bench
+rules:
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes]
+    verbs: [create, get, list, patch, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, get, list, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sandbox-manager-sandboxes
+  namespace: toolcall-bench
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sandbox-manager-sandboxes
+subjects:
+  - kind: ServiceAccount
+    name: sandbox-manager
+    namespace: webapp
+---
+# The agent-sandbox and reuse arms: the upstream SDK in the load generator claims sandboxes and
+# reads their status; the harness also resizes the warm pool between runs.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loadgen
+  namespace: toolcall-loadgen
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: loadgen
+  namespace: toolcall-bench
+rules:
+  - apiGroups: [extensions.agents.x-k8s.io]
+    resources: [sandboxclaims]
+    verbs: [create, get, list, watch, delete, deletecollection]
+  - apiGroups: [extensions.agents.x-k8s.io]
+    resources: [sandboxwarmpools]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [extensions.agents.x-k8s.io]
+    resources: [sandboxtemplates]
+    verbs: [get, list]
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: loadgen
+  namespace: toolcall-bench
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: loadgen
+subjects:
+  - kind: ServiceAccount
+    name: loadgen
+    namespace: toolcall-loadgen
+---
+# The sandbox every agent-sandbox arm uses: the runtime image (its tag is
+# filled in by deploy.sh), same size as the sandboxmanager arm's, Ready once the runtime
+# answers. Network rules come from toolcall-sandbox-isolation above.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: toolcall-runtime
+  namespace: toolcall-bench
+spec:
+  networkPolicyManagement: Unmanaged
+  podTemplate:
+    spec:
+      terminationGracePeriodSeconds: 5
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      containers:
+        - name: sandbox
+          image: RUNTIME_IMAGE
+          ports:
+            - containerPort: 8888
+          readinessProbe:
+            httpGet: {path: /, port: 8888}
+            periodSeconds: 1
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+---
+# The agent-sandbox arm's warm pool: replicas 0 for cold starts, N for a pool of N. The harness sets replicas and
+# waits for readyReplicas before each run.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: toolcall-pool
+  namespace: toolcall-bench
+spec:
+  replicas: 0
+  sandboxTemplateRef:
+    name: toolcall-runtime
+---
+# Keeps the runtime image on every node, so no arm pays for pulling it
+# mid-run. `deploy.sh pin` restricts it to the sandbox nodes.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: prepull-runtime
+  namespace: toolcall-bench
+spec:
+  selector:
+    matchLabels: {app: prepull-runtime}
+  template:
+    metadata:
+      labels: {app: prepull-runtime}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: hold
+          image: RUNTIME_IMAGE
+          command: [sleep, infinity]
+          resources:
+            requests: {cpu: 1m, memory: 8Mi}
+            limits: {cpu: 10m, memory: 16Mi}
+---
+# The load generator: a long-running pod the harness is exec'd into.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  namespace: toolcall-loadgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: loadgen}
+  template:
+    metadata:
+      labels: {app: loadgen}
+    spec:
+      serviceAccountName: loadgen
+      containers:
+        - name: loadgen
+          image: LOADGEN_IMAGE
+          env:
+            - {name: SANDBOX_API_URL, value: "http://sandboxmanager-benchmark.webapp.svc.cluster.local"}
+          resources:
+            requests: {cpu: 500m, memory: 512Mi}

@@ -1,0 +1,18 @@
+# Local settings
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+uv.lock
+
+# Go build output
+/sandboxmanager/bin/
+/sandboxmanager/sandbox-manager
+
+# Harness output from your own runs (published runs live in benchmark/results/)
+/benchmark/harness/results/
+
+.DS_Store

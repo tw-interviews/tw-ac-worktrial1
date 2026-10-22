@@ -1,0 +1,1783 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SandboxManager Architecture</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: sticky table of contents on the left, one reading column of prose with full-width diagram figures. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #17202b; --muted: #5a6573;
+  --line: #d5dae1; --line-strong: #9aa5b3; --edge: #4a5563; --code-bg: #eceff4;
+  --cp: #2f5fa7; --cp-bg: #e8eef8;      /* control plane: API, Kubernetes */
+  --sb: #b0601a; --sb-bg: #fbf0e4;      /* sandbox side: user workloads */
+  --db: #2c7a57; --db-bg: #e5f2eb;      /* state: Postgres, volumes */
+  --warn: #a8321f;
+  --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a; /* chart series, palette slots 1-3 */
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f141a; --surface: #161d26; --fg: #e4e9ef; --muted: #96a1ae;
+    --line: #2a3440; --line-strong: #4d5a69; --edge: #a3adb9; --code-bg: #1c242e;
+    --cp: #84a9e6; --cp-bg: #18263b; --sb: #e2a467; --sb-bg: #2d2217;
+    --db: #72c49f; --db-bg: #142a20; --warn: #f08a76;
+    --c1: #3987e5; --c2: #d95926; --c3: #199e70;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f141a; --surface: #161d26; --fg: #e4e9ef; --muted: #96a1ae;
+  --line: #2a3440; --line-strong: #4d5a69; --edge: #a3adb9; --code-bg: #1c242e;
+  --cp: #84a9e6; --cp-bg: #18263b; --sb: #e2a467; --sb-bg: #2d2217;
+  --db: #72c49f; --db-bg: #142a20; --warn: #f08a76;
+  --c1: #3987e5; --c2: #d95926; --c3: #199e70;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.6 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.page {
+  max-width: 1180px; margin: 0 auto; padding-block: 40px 80px;
+  display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 48px;
+}
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; font-size: 13px; }
+nav.toc p { font: 600 11px/1 var(--font-body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+nav.toc a { display: block; padding: 4px 8px; border-radius: 4px; color: var(--fg); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { background: var(--cp-bg); color: var(--cp); }
+main { min-width: 0; max-width: 860px; }
+
+header.doc { padding-bottom: 28px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.eyebrow { font: 600 12px/1 var(--font-mono); color: var(--cp); letter-spacing: .04em; margin: 0 0 14px; }
+h1 { font: 700 44px/1.05 var(--font-display); letter-spacing: -.02em; margin: 0 0 14px; text-wrap: balance; }
+.lede { font-size: 18px; color: var(--muted); margin: 0; max-width: 62ch; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 0; padding: 0; list-style: none; }
+.facts li { font: 12px/1 var(--font-mono); padding: 6px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+.facts b { font-weight: 500; color: var(--muted); }
+
+section { padding-top: 44px; }
+h2 { font: 700 26px/1.2 var(--font-display); letter-spacing: -.01em; margin: 0 0 14px; text-wrap: balance; }
+h2 .num { font: 500 13px/1 var(--font-mono); color: var(--muted); margin-right: 10px; vertical-align: 4px; }
+h3 { font: 600 17px/1.3 var(--font-body); margin: 28px 0 8px; }
+p, ul, ol { max-width: 68ch; }
+p { margin: 0 0 12px; }
+ul, ol { padding-left: 20px; margin: 0 0 12px; }
+li { margin-bottom: 4px; }
+a { color: var(--cp); }
+code { font: 0.86em var(--font-mono); background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+pre { font: 13px/1.55 var(--font-mono); background: var(--code-bg); padding: 14px 16px; border-radius: 6px; overflow-x: auto; margin: 0 0 14px; }
+pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+strong { font-weight: 600; }
+
+figure { margin: 18px 0 22px; }
+.fig { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.fig svg { display: block; width: 100%; min-width: 760px; height: auto; }
+figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; max-width: 80ch; }
+figcaption b { color: var(--fg); font-weight: 600; }
+
+.tbl { overflow-x: auto; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font: 600 11px/1.3 var(--font-body); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); background: var(--bg); }
+td code { white-space: nowrap; overflow-wrap: normal; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
+.legend span::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; border: 1.5px solid; }
+.legend .l-cp::before { background: var(--cp-bg); border-color: var(--cp); }
+.legend .l-sb::before { background: var(--sb-bg); border-color: var(--sb); }
+.legend .l-db::before { background: var(--db-bg); border-color: var(--db); }
+.legend .l-ext::before { background: var(--surface); border-color: var(--line-strong); }
+
+.callout { border-left: 3px solid var(--sb); background: var(--sb-bg); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 0 0 14px; max-width: 72ch; font-size: 14px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 0 0 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.card h4 { margin: 0 0 6px; font: 600 14px/1.3 var(--font-body); }
+.card p, .card ul { font-size: 13.5px; margin: 0; }
+.card ul { padding-left: 18px; }
+
+/* SVG diagram styles: everything takes its colour from the theme tokens. */
+svg text { font-family: var(--font-body); fill: var(--fg); }
+svg .t { font-size: 13px; font-weight: 600; }
+svg .s { font-size: 11px; fill: var(--muted); }
+svg .m { font-family: var(--font-mono); font-size: 11.5px; }
+svg .ms { font-family: var(--font-mono); font-size: 10.5px; fill: var(--muted); }
+svg .zl { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; fill: var(--muted); }
+svg .halo { paint-order: stroke; stroke: var(--surface); stroke-width: 5px; stroke-linejoin: round; }
+svg .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.2; }
+svg .cp { fill: var(--cp-bg); stroke: var(--cp); stroke-width: 1.3; }
+svg .sb { fill: var(--sb-bg); stroke: var(--sb); stroke-width: 1.3; }
+svg .db { fill: var(--db-bg); stroke: var(--db); stroke-width: 1.3; }
+svg .err { fill: var(--surface); stroke: var(--warn); stroke-width: 1.3; stroke-dasharray: 4 3; }
+svg .zone { fill: none; stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 5 4; }
+svg .zone-sb { fill: none; stroke: var(--sb); stroke-width: 1.2; stroke-dasharray: 5 4; }
+svg .band { fill: var(--sb-bg); opacity: .55; }
+svg .life { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 4; }
+svg .e { fill: none; stroke: var(--edge); stroke-width: 1.4; }
+svg .e.d { stroke-dasharray: 5 4; }
+svg .ah { fill: var(--edge); }
+svg .row { stroke: var(--line); stroke-width: 1; }
+svg .warn { fill: var(--warn); }
+
+/* Charts (Benchmarks): series colours --c1..--c3 in argument order; text stays in ink tokens. */
+.legend .l-c1::before { background: var(--c1); border-color: var(--c1); }
+.legend .l-c2::before { background: var(--c2); border-color: var(--c2); }
+.legend .l-c3::before { background: var(--c3); border-color: var(--c3); }
+svg .grid { stroke: var(--line); stroke-width: 1; }
+svg .axis { stroke: var(--line-strong); stroke-width: 1; }
+svg .hit { fill: transparent; }
+svg .seg.c1, svg .col.c1, svg .dot.c1 { fill: var(--c1); }
+svg .seg.c2, svg .col.c2, svg .dot.c2 { fill: var(--c2); }
+svg .seg.c3, svg .col.c3, svg .dot.c3 { fill: var(--c3); }
+svg .seg.sw, svg .dot.nc { fill: var(--muted); }
+svg .seg.p2 { opacity: .62; }
+svg .seg.p3 { opacity: .32; }
+svg .dot { stroke: var(--surface); stroke-width: 2; }
+svg .dot-o { fill: var(--surface); stroke-width: 2; }
+svg .dot-o.c1 { stroke: var(--c1); }
+svg .dot-o.c2 { stroke: var(--c2); }
+svg .dot-o.c3 { stroke: var(--c3); }
+svg .dot-o.nc { stroke: var(--muted); }
+svg .p50 { stroke: var(--fg); stroke-width: 2; }
+svg .rng { stroke-width: 3; stroke-linecap: round; opacity: .55; }
+svg .rng.c1 { stroke: var(--c1); }
+svg .rng.c2 { stroke: var(--c2); }
+svg .rng.c3 { stroke: var(--c3); }
+svg [data-tip]:hover .col, svg [data-tip]:hover .seg { filter: brightness(1.12); }
+details.data { margin: 0 0 16px; }
+details.data summary { cursor: pointer; font-size: 13.5px; color: var(--cp); margin-bottom: 10px; }
+#tip { position: fixed; z-index: 10; pointer-events: none; max-width: 320px; padding: 6px 9px; font: 12px/1.4 var(--font-body);
+  background: var(--surface); color: var(--fg); border: 1px solid var(--line-strong); border-radius: 6px; box-shadow: 0 4px 14px rgb(0 0 0 / .14); display: none; }
+
+@media (max-width: 960px) {
+  .page { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: 28px; }
+  nav.toc { position: static; margin-bottom: 8px; padding-bottom: 20px; border-bottom: 1px solid var(--line); order: 0; }
+  nav.toc ol { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+  h1 { font-size: 34px; }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="ah" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+</svg>
+
+<div class="page">
+<nav class="toc" aria-label="Contents">
+  <p>Contents</p>
+  <ol>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#topology">System topology</a></li>
+    <li><a href="#api">HTTP API</a></li>
+    <li><a href="#lifecycle">Sandbox lifecycle</a></li>
+    <li><a href="#pod">Inside a sandbox pod</a></li>
+    <li><a href="#executions">Executions</a></li>
+    <li><a href="#files">Files and snapshots</a></li>
+    <li><a href="#data">Data model</a></li>
+    <li><a href="#sdk">Python SDK</a></li>
+    <li><a href="#isolation">Isolation and limits</a></li>
+    <li><a href="#deploy">Build and deploy</a></li>
+    <li><a href="#ops">Operations and testing</a></li>
+    <li><a href="#bench">Benchmarks</a></li>
+    <li><a href="#limits">Known limits</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="doc">
+  <p class="eyebrow">k3d-webapp · architecture · 2026-10-22</p>
+  <h1>SandboxManager Architecture</h1>
+  <p class="lede">A Go JSON API that turns “run this image” into an isolated, quota-bounded, self-expiring Kubernetes pod whose workspace survives pause and delete as an S3 snapshot, plus a Python SDK that makes each sandbox feel like a local object.</p>
+  <ul class="facts">
+    <li><b>API</b> Go 1.25 · net/http</li>
+    <li><b>k8s</b> client-go v0.35</li>
+    <li><b>DB</b> Postgres 17 · pgx/v5</li>
+    <li><b>CRD</b> agents.x-k8s.io/v1beta1</li>
+    <li><b>Cluster</b> EKS v1.37 · 5 × c7i-flex.large</li>
+    <li><b>Files</b> emptyDir · node agent · S3</li>
+    <li><b>SDK</b> Python ≥ 3.9 · httpx</li>
+  </ul>
+</header>
+
+<!-- ───────────────────────────── 1 ───────────────────────────── -->
+<section id="overview">
+  <h2><span class="num">01</span>Overview</h2>
+  <p><strong>SandboxManager</strong> (binary, image and Kubernetes objects: <code>sandbox-manager</code>) is a stateless HTTP service. It does not run its own controller. Instead it renders Sandbox objects for the upstream <a href="https://github.com/kubernetes-sigs/agent-sandbox">kubernetes-sigs agent-sandbox</a> controller, keeps a record of each one in Postgres, and talks to the Kubernetes API for everything else: admission dry-runs and exec streams. File I/O on sandbox workspaces is done by <strong>sandbox-agent</strong>, a small DaemonSet with one agent per node, which also saves workspaces to S3 and restores them.</p>
+  <p>The service owns four concerns:</p>
+  <div class="cols">
+    <div class="card"><h4>Sandboxes</h4><p>Create, list, inspect and delete. Each sandbox is one user container with a TTL that every bit of activity extends.</p></div>
+    <div class="card"><h4>Executions</h4><p>Run argv in the user container over the exec subresource, record status, exit code and capped output.</p></div>
+    <div class="card"><h4>Files</h4><p>A 1Gi emptyDir per sandbox at <code>/workspace</code>, saved to S3 on pause, delete and just before expiry, and readable for 12h after the sandbox is gone.</p></div>
+    <div class="card"><h4>Housekeeping</h4><p>A GC loop removes expired snapshots and rows; snapshot loops save sandboxes about to expire and restore resumed ones.</p></div>
+  </div>
+  <p>A small notes CRUD (<code>/notes</code>) is still served from the same binary. It is the project's original demo endpoint and is independent of sandboxes. Several names (<code>webapp</code> namespace, Postgres DB/user, the <code>webapp/sandbox-id</code> label) intentionally keep that original name.</p>
+</section>
+
+<!-- ───────────────────────────── 2 ───────────────────────────── -->
+<section id="topology">
+  <h2><span class="num">02</span>System topology</h2>
+  <p>The service runs on an EKS cluster (the local k3d cluster runs an older version without the agent). The control plane (API, database, node agents) lives in namespace <code>webapp</code>. User workloads live in namespace <code>sandboxes</code>, which has its own quota, limits and network policy. Workspaces are emptyDir volumes on each node's disk; the agent on that node reads and writes them, and moves them to and from an S3 bucket. Clients reach the API through <code>kubectl port-forward</code>; the API itself has no authentication.</p>
+  <div class="legend"><span class="l-cp">Control plane</span><span class="l-sb">Sandbox workloads</span><span class="l-db">State</span><span class="l-ext">Client side</span></div>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 660" role="img" aria-labelledby="d1t">
+        <title id="d1t">Deployment topology: client, EKS cluster with the webapp namespace, control plane and a node running a sandbox and its agent, and the S3 bucket</title>
+        <!-- client -->
+        <rect class="zone" x="16" y="48" width="196" height="576" rx="10"/>
+        <text class="zl" x="32" y="72">Your machine</text>
+        <rect class="box" x="32" y="96" width="164" height="64" rx="6"/>
+        <text class="t" x="114" y="123" text-anchor="middle">Python SDK</text>
+        <text class="ms" x="114" y="142" text-anchor="middle">sandbox_sdk · httpx</text>
+        <rect class="box" x="32" y="214" width="164" height="56" rx="6"/>
+        <text class="t" x="114" y="237" text-anchor="middle">kubectl port-forward</text>
+        <text class="ms" x="114" y="255" text-anchor="middle">:8081 → svc :80</text>
+        <rect class="box" x="32" y="300" width="164" height="56" rx="6"/>
+        <text class="t" x="114" y="323" text-anchor="middle">tools/dbinspect.py</text>
+        <text class="ms" x="114" y="341" text-anchor="middle">kubectl exec, read-only</text>
+        <path class="e" d="M114 160 V212" marker-end="url(#ah)"/>
+        <text class="s halo" x="122" y="191">HTTP JSON</text>
+
+        <!-- cluster -->
+        <rect class="zone" x="232" y="16" width="556" height="628" rx="12"/>
+        <text class="zl" x="248" y="38">EKS cluster · Kubernetes v1.37 · 5 nodes</text>
+
+        <rect class="zone" x="248" y="52" width="262" height="246" rx="8"/>
+        <text class="zl" x="262" y="72">namespace webapp</text>
+        <rect class="cp" x="264" y="84" width="230" height="44" rx="6"/>
+        <text class="t" x="379" y="103" text-anchor="middle">Service</text>
+        <text class="ms" x="379" y="119" text-anchor="middle">sandbox-manager:80</text>
+        <rect class="cp" x="264" y="144" width="230" height="64" rx="6"/>
+        <text class="t" x="379" y="167" text-anchor="middle">Deployment sandbox-manager × 2</text>
+        <text class="s" x="379" y="185" text-anchor="middle">Go API · GC · snapshot and</text>
+        <text class="s" x="379" y="200" text-anchor="middle">restore loops</text>
+        <rect class="db" x="264" y="226" width="230" height="56" rx="6"/>
+        <text class="t" x="379" y="249" text-anchor="middle">postgres-0 · Postgres 17</text>
+        <text class="s" x="379" y="267" text-anchor="middle">sandboxes · executions · gp3 EBS</text>
+        <path class="e" d="M196 242 H232 V106 H262" marker-end="url(#ah)"/>
+        <path class="e" d="M379 128 V142" marker-end="url(#ah)"/>
+        <path class="e" d="M379 208 V224" marker-end="url(#ah)"/>
+        <path class="e d" d="M196 328 H240 V264 H262" marker-end="url(#ah)"/>
+
+        <rect class="zone" x="526" y="52" width="246" height="246" rx="8"/>
+        <text class="zl" x="540" y="72">Kubernetes control plane</text>
+        <rect class="cp" x="542" y="84" width="214" height="60" rx="6"/>
+        <text class="t" x="649" y="107" text-anchor="middle">Kubernetes API server</text>
+        <text class="s" x="649" y="125" text-anchor="middle">CRUD · dry-run · pods/exec</text>
+        <rect class="cp" x="542" y="176" width="214" height="72" rx="6"/>
+        <text class="t" x="649" y="199" text-anchor="middle">agent-sandbox controller</text>
+        <text class="s" x="649" y="217" text-anchor="middle">Sandbox → owned Pod</text>
+        <text class="s" x="649" y="233" text-anchor="middle">deletes at shutdownTime</text>
+        <path class="e" d="M494 176 H518 V114 H540" marker-end="url(#ah)"/>
+        <text class="s halo" x="524" y="166">client-go</text>
+        <path class="e" d="M649 146 V174" marker-start="url(#ah)" marker-end="url(#ah)"/>
+        <text class="s halo" x="657" y="164">watch</text>
+
+        <!-- a node -->
+        <rect class="zone" x="248" y="318" width="524" height="310" rx="8"/>
+        <text class="zl" x="262" y="338">each node · c7i-flex.large</text>
+        <rect class="zone-sb" x="262" y="350" width="318" height="264" rx="8"/>
+        <text class="zl" x="276" y="370">namespace sandboxes</text>
+        <rect class="sb" x="278" y="384" width="118" height="58" rx="6"/>
+        <text class="t" x="337" y="408" text-anchor="middle">Sandbox</text>
+        <text class="ms" x="337" y="426" text-anchor="middle">sbx-&lt;id&gt;</text>
+        <rect class="sb" x="412" y="380" width="154" height="128" rx="8"/>
+        <text class="t" x="489" y="400" text-anchor="middle">Pod sbx-&lt;id&gt;</text>
+        <rect class="box" x="424" y="410" width="130" height="38" rx="5"/>
+        <text class="t" x="489" y="426" text-anchor="middle">wait</text>
+        <text class="s" x="489" y="441" text-anchor="middle">init · only if gated</text>
+        <rect class="box" x="424" y="456" width="130" height="40" rx="5"/>
+        <text class="t" x="489" y="473" text-anchor="middle">sandbox</text>
+        <text class="s" x="489" y="488" text-anchor="middle">user image</text>
+        <rect class="db" x="278" y="534" width="288" height="64" rx="6"/>
+        <text class="t" x="422" y="557" text-anchor="middle">emptyDir sandbox-workspace</text>
+        <text class="s" x="422" y="575" text-anchor="middle">1Gi on node disk · /workspace</text>
+        <text class="s" x="422" y="590" text-anchor="middle">lives as long as the pod</text>
+        <path class="e" d="M396 412 H410" marker-end="url(#ah)"/>
+        <path class="e" d="M489 508 V532" marker-end="url(#ah)"/>
+        <text class="s halo" x="497" y="524">mounts</text>
+        <path class="e" d="M700 250 V300 H337 V382" marker-end="url(#ah)"/>
+        <text class="s halo" x="560" y="296">creates · deletes</text>
+
+        <rect class="cp" x="598" y="422" width="160" height="94" rx="6"/>
+        <text class="t" x="678" y="445" text-anchor="middle">sandbox-agent</text>
+        <text class="s" x="678" y="463" text-anchor="middle">DaemonSet, ns webapp</text>
+        <text class="s" x="678" y="479" text-anchor="middle">hostPath kubelet</text>
+        <text class="s" x="678" y="494" text-anchor="middle">pods dir · :8090</text>
+        <path class="e" d="M678 516 V566 H568" marker-end="url(#ah)"/>
+        <text class="s halo" x="686" y="546">file I/O</text>
+        <path class="e" d="M494 196 H508 V310 H738 V420" marker-end="url(#ah)"/>
+        <text class="s halo" x="746" y="380" text-anchor="start">HTTP</text>
+        <text class="s halo" x="746" y="395" text-anchor="start">+ token</text>
+
+        <!-- AWS -->
+        <rect class="zone" x="804" y="48" width="180" height="576" rx="10"/>
+        <text class="zl" x="820" y="72">AWS</text>
+        <rect class="db" x="820" y="420" width="148" height="98" rx="6"/>
+        <text class="t" x="894" y="444" text-anchor="middle">S3 bucket</text>
+        <text class="s" x="894" y="462" text-anchor="middle">snapshots</text>
+        <text class="ms" x="894" y="480" text-anchor="middle">sandboxes/&lt;id&gt;/</text>
+        <text class="ms" x="894" y="496" text-anchor="middle">&lt;uuid&gt;.tar</text>
+        <path class="e" d="M758 470 H818" marker-end="url(#ah)"/>
+        <text class="s halo" x="788" y="462" text-anchor="middle">save</text>
+        <text class="s halo" x="788" y="488" text-anchor="middle">restore</text>
+        <rect class="box" x="820" y="96" width="148" height="56" rx="6"/>
+        <text class="t" x="894" y="119" text-anchor="middle">ECR</text>
+        <text class="s" x="894" y="137" text-anchor="middle">both images</text>
+        <path class="e d" d="M494 156 H508 V30 H894 V418" marker-end="url(#ah)"/>
+        <text class="s halo" x="636" y="26">paused and gone reads · paused writes · GC</text>
+        <text class="s" x="820" y="560">IAM via EKS Pod Identity,</text>
+        <text class="s" x="820" y="576">API and agent only</text>
+      </svg>
+    </div>
+    <figcaption><b>Deployment topology.</b> Solid arrows are direct calls. The arrow from the Deployment to the Sandbox goes through the API server. Executions still use the exec subresource (API server → kubelet); file requests for a running sandbox go to the agent on the pod's node over the pod network, authenticated with a bearer token. The <code>wait</code> init container exists only in pods that must wait for staged files or a restore. NetworkPolicy, which keeps sandboxes away from the control plane, is enforced on k3s but not yet on EKS (see Isolation).</figcaption>
+  </figure>
+
+  <h3>Components</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Component</th><th>Source</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td>sandbox-manager</td><td><code>main.go</code> <code>sandbox.go</code> <code>execution.go</code> <code>files.go</code> <code>pause.go</code> <code>snapshots.go</code> <code>agent.go</code> <code>gc.go</code></td><td>Stateless API, 2 replicas. Migrates the schema on start, runs the GC, expiry-snapshot and restore loops, forwards file requests to agents, serves snapshots. Requests 50m/64Mi, limit 256Mi.</td></tr>
+      <tr><td>sandbox-agent</td><td><code>agent/main.go</code>, <code>k8s/agent.yaml</code></td><td>DaemonSet, one per node. Does all file I/O on the workspaces of the sandbox pods on its node, takes snapshots to S3 and restores them. Root with five file capabilities, read-only rootfs, no Kubernetes token.</td></tr>
+      <tr><td>Shared packages</td><td><code>internal/workspace</code>, <code>internal/snapstore</code></td><td>Workspace operations through <code>os.Root</code> and on snapshot tars; the S3 store. Used by both binaries.</td></tr>
+      <tr><td>Postgres</td><td><code>k8s/postgres.yaml</code></td><td>Source of truth for sandbox records, TTLs, snapshot keys and execution history. StatefulSet with a 1Gi gp3 EBS PVC. Requests 100m/128Mi, limit 512Mi.</td></tr>
+      <tr><td>agent-sandbox controller</td><td>upstream, <code>agent-sandbox-system</code></td><td>Turns each <code>Sandbox</code> into a pod it owns, reports <code>Ready</code> and <code>status.selector</code>, suspends on <code>operatingMode: Suspended</code>, and deletes the Sandbox at <code>spec.shutdownTime</code>.</td></tr>
+      <tr><td>Sandbox pod</td><td>rendered by <code>podSpec</code> + <code>withWorkspace</code></td><td>One user container <code>sandbox</code> with the workspace emptyDir, plus a <code>wait</code> init container when it must wait for the agent.</td></tr>
+      <tr><td>S3 bucket</td><td>AWS, set up once</td><td>Workspace snapshots. Private, SSE-S3, 10-day lifecycle rule as a backstop.</td></tr>
+      <tr><td>Python SDK</td><td><code>sdk/python</code></td><td>Sync and async object APIs over the HTTP API.</td></tr>
+      <tr><td>dbinspect</td><td><code>tools/dbinspect.py</code></td><td>Read-only DB explorer and DB-versus-cluster consistency checker.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────────── 3 ───────────────────────────── -->
+<section id="api">
+  <h2><span class="num">03</span>HTTP API</h2>
+  <p>Routes use Go 1.22+ <code>ServeMux</code> method patterns. Bodies are JSON (unknown fields rejected on sandbox and execution creation) except file transfers, which stream raw bytes or tar. Errors are always <code>{"error": "..."}</code>.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Method and path</th><th>Purpose</th><th>Notable statuses</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /healthz</code></td><td>Pings Postgres; used by the readiness probe.</td><td class="num">503 DB down</td></tr>
+      <tr><td><code>POST /sandboxes</code></td><td>Create. Body: <code>image</code>, <code>command</code>, <code>args</code>, <code>env</code>, <code>resources</code>, <code>ttl_seconds</code> (default 300, 30–86400), <code>stage_files</code>.</td><td class="num">201 · 400 · 429 · 502</td></tr>
+      <tr><td><code>GET /sandboxes</code></td><td>All records with live status. One label-selector List per namespace in the rows.</td><td class="num">200 · 502</td></tr>
+      <tr><td><code>GET /sandboxes/{id}</code></td><td>One record with live status.</td><td class="num">400 · 404</td></tr>
+      <tr><td><code>DELETE /sandboxes/{id}</code></td><td>Snapshot a running sandbox's workspace, delete it from the cluster and set <code>deleted_at</code>. <code>?purge=true</code> removes snapshots and row now.</td><td class="num">204 · 404 · 502</td></tr>
+      <tr><td><code>POST /sandboxes/{id}/pause</code></td><td>Snapshot the workspace, then suspend (pod deleted). <code>?force=true</code> even if commands are running.</td><td class="num">202 · 409 · 502</td></tr>
+      <tr><td><code>POST /sandboxes/{id}/resume</code></td><td>Start a new pod; it waits until the snapshot is restored.</td><td class="num">202 · 409 · 429</td></tr>
+      <tr><td><code>POST /sandbox/executions</code></td><td>Run <code>command</code> (argv) with optional <code>stdin</code> and <code>timeout_seconds</code> (default 30, max 300). Blocks until done.</td><td class="num">200 · 409 · 502</td></tr>
+      <tr><td><code>GET /sandbox/executions</code></td><td>Newest first, optional <code>?sandbox_id=</code>. Output omitted.</td><td class="num">200</td></tr>
+      <tr><td><code>GET /sandbox/executions/{id}</code></td><td>One execution with full output.</td><td class="num">404</td></tr>
+      <tr><td><code>POST /sandboxes/{id}/files</code></td><td>Upload a tar stream into <code>/workspace</code>.</td><td class="num">200 · 400 · 413 · 507</td></tr>
+      <tr><td><code>PUT /sandboxes/{id}/files/{path}</code></td><td>Write one file atomically. Returns path, size and SHA-256. A paused sandbox needs a Content-Length.</td><td class="num">200 · 409 · 411 · 507</td></tr>
+      <tr><td><code>GET /sandboxes/{id}/files/{path}</code></td><td>Stream a file, or a directory as tar. <code>?list</code> returns JSON entries.</td><td class="num">200 · 404 · 410</td></tr>
+      <tr><td><code>DELETE /sandboxes/{id}/files/{path}</code></td><td>Remove a file or directory recursively.</td><td class="num">204 · 404</td></tr>
+      <tr><td><code>POST /sandboxes/{id}/staging/complete</code></td><td>Release the user container of a <code>stage_files</code> sandbox. Idempotent.</td><td class="num">204 · 409</td></tr>
+      <tr><td><code>GET|POST /notes</code>, <code>GET|DELETE /notes/{id}</code></td><td>Legacy notes demo.</td><td class="num">—</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────────── 4 ───────────────────────────── -->
+<section id="lifecycle">
+  <h2><span class="num">04</span>Sandbox lifecycle</h2>
+  <h3>Creating a sandbox</h3>
+  <p>Create is designed so that a failure at any step leaves nothing behind, and so that quota problems surface as a fast, clear 429 instead of a Sandbox that never becomes ready. The DB transaction stays open across the cluster calls and commits only once the Sandbox object exists. The POST returns as soon as that commit lands; the pod starts in the background and clients poll for <code>Ready</code>.</p>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 720" role="img" aria-labelledby="d2t">
+        <title id="d2t">Sequence diagram for creating a sandbox</title>
+        <rect class="band" x="16" y="452" width="968" height="190" rx="6"/>
+        <text class="zl" x="26" y="470">only with files=</text>
+        <rect class="box" x="20" y="20" width="110" height="40" rx="6"/><text class="t" x="75" y="45" text-anchor="middle">SDK</text>
+        <rect class="cp" x="160" y="20" width="130" height="40" rx="6"/><text class="t" x="225" y="45" text-anchor="middle">sandbox-manager</text>
+        <rect class="db" x="320" y="20" width="110" height="40" rx="6"/><text class="t" x="375" y="45" text-anchor="middle">Postgres</text>
+        <rect class="cp" x="460" y="20" width="110" height="40" rx="6"/><text class="t" x="515" y="45" text-anchor="middle">K8s API</text>
+        <rect class="cp" x="600" y="20" width="110" height="40" rx="6"/><text class="t" x="655" y="45" text-anchor="middle">controller</text>
+        <rect class="sb" x="740" y="20" width="110" height="40" rx="6"/><text class="t" x="795" y="45" text-anchor="middle">Pod</text>
+        <rect class="cp" x="874" y="20" width="110" height="40" rx="6"/><text class="t" x="929" y="45" text-anchor="middle">agent</text>
+        <line class="life" x1="75" y1="60" x2="75" y2="700"/>
+        <line class="life" x1="225" y1="60" x2="225" y2="700"/>
+        <line class="life" x1="375" y1="60" x2="375" y2="700"/>
+        <line class="life" x1="515" y1="60" x2="515" y2="700"/>
+        <line class="life" x1="655" y1="60" x2="655" y2="700"/>
+        <line class="life" x1="795" y1="60" x2="795" y2="700"/>
+        <line class="life" x1="929" y1="60" x2="929" y2="700"/>
+
+        <line class="e" x1="75" y1="92" x2="223" y2="92" marker-end="url(#ah)"/>
+        <text class="m halo" x="150" y="85" text-anchor="middle">POST /sandboxes</text>
+        <line class="e" x1="225" y1="130" x2="513" y2="130" marker-end="url(#ah)"/>
+        <text class="m halo" x="370" y="123" text-anchor="middle">dry-run Pod (LimitRange + ResourceQuota)</text>
+        <text class="s halo" x="370" y="146" text-anchor="middle">quota full → 429 · over per-container max → 400 · nothing created</text>
+        <line class="e" x1="225" y1="178" x2="373" y2="178" marker-end="url(#ah)"/>
+        <text class="m halo" x="300" y="171" text-anchor="middle">BEGIN · INSERT row</text>
+        <line class="e" x1="225" y1="216" x2="513" y2="216" marker-end="url(#ah)"/>
+        <text class="m halo" x="370" y="209" text-anchor="middle">create Sandbox (shutdownTime, podTemplate)</text>
+        <line class="e" x1="225" y1="254" x2="373" y2="254" marker-end="url(#ah)"/>
+        <text class="m halo" x="300" y="247" text-anchor="middle">COMMIT</text>
+        <line class="e d" x1="225" y1="292" x2="77" y2="292" marker-end="url(#ah)"/>
+        <text class="m halo" x="150" y="285" text-anchor="middle">201 {sandbox_id, …}</text>
+        <line class="e d" x1="515" y1="330" x2="653" y2="330" marker-end="url(#ah)"/>
+        <text class="m halo" x="584" y="323" text-anchor="middle">watch: added</text>
+        <line class="e" x1="655" y1="368" x2="793" y2="368" marker-end="url(#ah)"/>
+        <text class="m halo" x="724" y="361" text-anchor="middle">create owned Pod</text>
+        <rect class="sb" x="700" y="386" width="190" height="46" rx="4"/>
+        <text class="s" x="795" y="405" text-anchor="middle">emptyDir created; without files=</text>
+        <text class="s" x="795" y="420" text-anchor="middle">user container starts → Ready</text>
+
+        <rect class="box" x="700" y="478" width="190" height="36" rx="4"/>
+        <text class="s" x="795" y="500" text-anchor="middle">wait init container holds the pod</text>
+        <line class="e" x1="75" y1="540" x2="223" y2="540" marker-end="url(#ah)"/>
+        <text class="m halo" x="150" y="533" text-anchor="middle">POST /files (tar)</text>
+        <line class="e" x1="225" y1="566" x2="927" y2="566" marker-end="url(#ah)"/>
+        <text class="m halo" x="576" y="559" text-anchor="middle">forward to the agent on the pod's node: extract into its emptyDir</text>
+        <line class="e" x1="75" y1="596" x2="223" y2="596" marker-end="url(#ah)"/>
+        <text class="m halo" x="150" y="589" text-anchor="middle">POST /staging/complete</text>
+        <line class="e" x1="225" y1="622" x2="927" y2="622" marker-end="url(#ah)"/>
+        <text class="m halo" x="576" y="615" text-anchor="middle">POST /pods/{uid}/ready → agent writes /control/ready · set staged_at</text>
+
+        <line class="e" x1="75" y1="676" x2="223" y2="676" marker-end="url(#ah)"/>
+        <text class="m halo" x="150" y="669" text-anchor="middle">GET /sandboxes/{id} …</text>
+        <text class="s" x="233" y="680">poll every 0.5 s until Ready (SDK wait_ready, default 120 s); wait exits, user container starts</text>
+      </svg>
+    </div>
+    <figcaption><b>Create sequence.</b> No volume is provisioned: the workspace is an emptyDir that exists as soon as the pod is scheduled. If the Sandbox create fails, the open transaction rolls back and nothing is left; if the commit itself fails, the Sandbox is deleted again. Without <code>files=</code> the pod has no <code>wait</code> container and the user command starts right away.</figcaption>
+  </figure>
+
+  <h3>Status model</h3>
+  <p>The database stores the record; the status is computed on every read by combining the row with the live Sandbox object (<code>observe</code> in <code>sandbox.go</code>). Gone sandboxes keep their row, executions and latest snapshot for the recovery window (<code>VOLUME_RETENTION</code>, default 12h) and then the GC removes them.</p>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 410" role="img" aria-labelledby="d3t">
+        <title id="d3t">Sandbox status state machine</title>
+        <rect class="sb" x="30" y="110" width="130" height="50" rx="25"/>
+        <text class="t" x="95" y="140" text-anchor="middle">Staging</text>
+        <rect class="sb" x="220" y="110" width="130" height="50" rx="25"/>
+        <text class="t" x="285" y="140" text-anchor="middle">NotReady</text>
+        <text class="s" x="285" y="180" text-anchor="middle">entry point without files=</text>
+        <rect class="cp" x="410" y="110" width="130" height="50" rx="25"/>
+        <text class="t" x="475" y="140" text-anchor="middle">Ready</text>
+        <path class="e" d="M160 135 H218" marker-end="url(#ah)"/>
+        <text class="ms halo" x="189" y="126" text-anchor="middle">complete</text>
+        <path class="e" d="M350 135 H408" marker-end="url(#ah)"/>
+        <text class="ms halo" x="379" y="126" text-anchor="middle">pod ready</text>
+        <path class="e" d="M450 110 C 450 58, 500 58, 500 108" marker-end="url(#ah)"/>
+        <text class="s" x="475" y="50" text-anchor="middle">exec or file transfer extends the TTL</text>
+
+        <rect class="sb" x="410" y="270" width="130" height="50" rx="25"/>
+        <text class="t" x="475" y="300" text-anchor="middle">Pausing</text>
+        <rect class="sb" x="220" y="270" width="130" height="50" rx="25"/>
+        <text class="t" x="285" y="300" text-anchor="middle">Paused</text>
+        <rect class="sb" x="30" y="270" width="130" height="50" rx="25"/>
+        <text class="t" x="95" y="300" text-anchor="middle">Resuming</text>
+        <path class="e" d="M475 160 V268" marker-end="url(#ah)"/>
+        <text class="s halo" x="483" y="208">POST /pause:</text>
+        <text class="s halo" x="483" y="224">snapshot saved</text>
+        <path class="e" d="M410 295 H352" marker-end="url(#ah)"/>
+        <text class="ms halo" x="381" y="286" text-anchor="middle">pod gone</text>
+        <path class="e" d="M220 295 H162" marker-end="url(#ah)"/>
+        <text class="ms halo" x="191" y="286" text-anchor="middle">resume</text>
+        <path class="e" d="M95 270 V238 H440 V162" marker-end="url(#ah)"/>
+        <text class="s halo" x="200" y="232">snapshot restored, pod ready</text>
+
+        <rect class="box" x="640" y="30" width="160" height="50" rx="8"/>
+        <text class="t" x="720" y="52" text-anchor="middle">Deleted</text>
+        <text class="s" x="720" y="69" text-anchor="middle">deleted_at set by DELETE</text>
+        <rect class="box" x="640" y="110" width="160" height="50" rx="8"/>
+        <text class="t" x="720" y="132" text-anchor="middle">Deleting</text>
+        <text class="s" x="720" y="149" text-anchor="middle">deletionTimestamp set</text>
+        <rect class="box" x="640" y="190" width="160" height="50" rx="8"/>
+        <text class="t" x="720" y="212" text-anchor="middle">Missing</text>
+        <text class="s" x="720" y="229" text-anchor="middle">gone, TTL not yet passed</text>
+        <rect class="box" x="640" y="270" width="160" height="50" rx="8"/>
+        <text class="t" x="720" y="292" text-anchor="middle">Expired</text>
+        <text class="s" x="720" y="309" text-anchor="middle">gone, expires_at passed</text>
+        <path class="e" d="M540 122 C 590 122, 590 55, 638 55" marker-end="url(#ah)"/>
+        <path class="e" d="M540 135 H638" marker-end="url(#ah)"/>
+        <path class="e" d="M540 148 C 590 148, 590 215, 638 215" marker-end="url(#ah)"/>
+        <path class="e" d="M720 160 V188" marker-end="url(#ah)"/>
+        <path class="e d" d="M285 320 V372 H720 V322" marker-end="url(#ah)"/>
+        <text class="s halo" x="500" y="368" text-anchor="middle">paused TTL passes (expiry snapshot first if running)</text>
+
+        <rect class="db" x="850" y="140" width="130" height="66" rx="8"/>
+        <text class="t" x="915" y="164" text-anchor="middle">Removed</text>
+        <text class="s" x="915" y="181" text-anchor="middle">row, history,</text>
+        <text class="s" x="915" y="195" text-anchor="middle">snapshots deleted</text>
+        <path class="e" d="M800 55 C 828 55, 828 158, 848 158" marker-end="url(#ah)"/>
+        <path class="e" d="M800 295 C 828 295, 828 190, 848 190" marker-end="url(#ah)"/>
+        <text class="s" x="915" y="228" text-anchor="middle">GC after 12h retention</text>
+        <text class="s" x="915" y="244" text-anchor="middle">?purge=true: at once</text>
+      </svg>
+    </div>
+    <figcaption><b>Statuses.</b> <code>Deleted</code> takes precedence over everything else. A sandbox counts as gone once <code>deleted_at</code> is set or <code>expires_at</code> has passed; from then on, file reads are served from its latest snapshot, writes and execs return 409. A running sandbox that reaches its TTL is snapshotted up to a minute before, so its files outlive it.</figcaption>
+  </figure>
+
+  <h3>TTL mechanics</h3>
+  <ul>
+    <li>Create sets <code>spec.shutdownTime = now + ttl</code> with <code>shutdownPolicy: Delete</code>, so the upstream controller deletes the Sandbox on expiry. No timer runs in the API. Times are rounded up to whole seconds because <code>shutdownTime</code> has second precision.</li>
+    <li>Every execution calls <code>extendTTL(timeout)</code>: <code>UPDATE … SET expires_at = GREATEST(expires_at, now + timeout + ttl)</code> under the row lock, then a merge-patch of <code>shutdownTime</code>, then commit. Expiry never moves backwards, and concurrent executions serialize on the row lock, so the cluster always ends up with the latest value.</li>
+    <li>File transfers call <code>keepAlive</code>, which refreshes the TTL right away and every 30 s until the transfer ends, always in the background: a write holds the row's <code>KEY SHARE</code> lock, and a synchronous refresh could queue behind a pending pause that is itself waiting for the write.</li>
+    <li>Rows with <code>ttl_seconds IS NULL</code> predate TTLs and never expire.</li>
+  </ul>
+
+  <h3>Pausing and resuming</h3>
+  <p>Pause uses the upstream <code>spec.operatingMode</code>: <code>Suspended</code> deletes only the pod. Because the workspace is an emptyDir, it is saved first. The pause holds the sandbox's row lock throughout, so executions and file writes wait and the snapshot includes everything written before the pause.</p>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 700" role="img" aria-labelledby="d10t">
+        <title id="d10t">Sequence diagram for pausing and resuming a sandbox</title>
+        <rect class="band" x="16" y="404" width="968" height="276" rx="6"/>
+        <text class="zl" x="26" y="422">resume</text>
+        <rect class="box" x="20" y="20" width="100" height="40" rx="6"/><text class="t" x="70" y="45" text-anchor="middle">SDK</text>
+        <rect class="cp" x="150" y="20" width="130" height="40" rx="6"/><text class="t" x="215" y="45" text-anchor="middle">sandbox-manager</text>
+        <rect class="db" x="310" y="20" width="110" height="40" rx="6"/><text class="t" x="365" y="45" text-anchor="middle">Postgres</text>
+        <rect class="cp" x="450" y="20" width="140" height="40" rx="6"/><text class="t" x="520" y="45" text-anchor="middle">K8s · controller</text>
+        <rect class="sb" x="620" y="20" width="100" height="40" rx="6"/><text class="t" x="670" y="45" text-anchor="middle">Pod</text>
+        <rect class="cp" x="750" y="20" width="100" height="40" rx="6"/><text class="t" x="800" y="45" text-anchor="middle">agent</text>
+        <rect class="db" x="880" y="20" width="100" height="40" rx="6"/><text class="t" x="930" y="45" text-anchor="middle">S3</text>
+        <line class="life" x1="70" y1="60" x2="70" y2="680"/>
+        <line class="life" x1="215" y1="60" x2="215" y2="680"/>
+        <line class="life" x1="365" y1="60" x2="365" y2="680"/>
+        <line class="life" x1="520" y1="60" x2="520" y2="680"/>
+        <line class="life" x1="670" y1="60" x2="670" y2="680"/>
+        <line class="life" x1="800" y1="60" x2="800" y2="680"/>
+        <line class="life" x1="930" y1="60" x2="930" y2="680"/>
+
+        <line class="e" x1="70" y1="88" x2="213" y2="88" marker-end="url(#ah)"/>
+        <text class="m halo" x="142" y="81" text-anchor="middle">POST /pause</text>
+        <line class="e" x1="215" y1="118" x2="363" y2="118" marker-end="url(#ah)"/>
+        <text class="m halo" x="290" y="111" text-anchor="middle">row FOR UPDATE</text>
+        <text class="s halo" x="290" y="134" text-anchor="middle">running commands → 409 unless ?force</text>
+        <line class="e" x1="215" y1="164" x2="798" y2="164" marker-end="url(#ah)"/>
+        <text class="m halo" x="506" y="157" text-anchor="middle">POST /pods/{uid}/snapshot</text>
+        <line class="e" x1="800" y1="192" x2="928" y2="192" marker-end="url(#ah)"/>
+        <text class="m halo" x="864" y="185" text-anchor="middle">tar → new key</text>
+        <line class="e d" x1="800" y1="220" x2="217" y2="220" marker-end="url(#ah)"/>
+        <text class="m halo" x="506" y="213" text-anchor="middle">{key, bytes} · failure → 502, nothing changed</text>
+        <line class="e" x1="215" y1="250" x2="363" y2="250" marker-end="url(#ah)"/>
+        <text class="m halo" x="290" y="243" text-anchor="middle">snapshot_key · Suspended</text>
+        <line class="e" x1="215" y1="282" x2="518" y2="282" marker-end="url(#ah)"/>
+        <text class="m halo" x="366" y="275" text-anchor="middle">PATCH Suspended · template += wait gate</text>
+        <line class="e" x1="215" y1="312" x2="363" y2="312" marker-end="url(#ah)"/>
+        <text class="m halo" x="290" y="305" text-anchor="middle">COMMIT</text>
+        <line class="e d" x1="215" y1="340" x2="72" y2="340" marker-end="url(#ah)"/>
+        <text class="m halo" x="142" y="333" text-anchor="middle">202 · old key deleted</text>
+        <line class="e" x1="520" y1="370" x2="668" y2="370" marker-end="url(#ah)"/>
+        <text class="m halo" x="594" y="363" text-anchor="middle">delete pod</text>
+
+        <line class="e" x1="70" y1="448" x2="213" y2="448" marker-end="url(#ah)"/>
+        <text class="m halo" x="142" y="441" text-anchor="middle">POST /resume</text>
+        <line class="e" x1="215" y1="478" x2="518" y2="478" marker-end="url(#ah)"/>
+        <text class="m halo" x="366" y="471" text-anchor="middle">dry-run pod (429) · PATCH Running · COMMIT</text>
+        <line class="e" x1="520" y1="508" x2="668" y2="508" marker-end="url(#ah)"/>
+        <text class="m halo" x="594" y="501" text-anchor="middle">create pod</text>
+        <rect class="box" x="600" y="520" width="140" height="34" rx="4"/>
+        <text class="s" x="670" y="541" text-anchor="middle">wait holds the pod</text>
+        <line class="e" x1="215" y1="574" x2="798" y2="574" marker-end="url(#ah)"/>
+        <text class="m halo" x="506" y="567" text-anchor="middle">restore loop: POST /pods/{uid}/restore {key}</text>
+        <line class="e" x1="800" y1="602" x2="928" y2="602" marker-end="url(#ah)"/>
+        <text class="m halo" x="864" y="595" text-anchor="middle">GET key</text>
+        <line class="e" x1="800" y1="632" x2="672" y2="632" marker-end="url(#ah)"/>
+        <text class="m halo" x="736" y="625" text-anchor="middle">extract · ready</text>
+        <rect class="sb" x="600" y="644" width="140" height="30" rx="4"/>
+        <text class="s" x="670" y="663" text-anchor="middle">user container → Ready</text>
+      </svg>
+    </div>
+    <figcaption><b>Pause and resume.</b> Every new key is stored before the row points at it, so a failed snapshot never loses the previous one. The pod-template change on the first pause means every later pod of this sandbox waits for a restore; the restore loop (every 2 s, kicked by resume) also catches pods replaced for other reasons, which come back with the last snapshot. Only <code>/workspace</code> survives a pause.</figcaption>
+  </figure>
+
+  <h3>Deleting</h3>
+  <p><code>DELETE</code> takes the row lock, has the agent snapshot a running sandbox's workspace, removes the Sandbox in the cluster (NotFound is fine) and returns without waiting for the pod; <code>terminationGracePeriodSeconds: 5</code> frees quota quickly even for PID-1 processes that ignore SIGTERM. A normal delete sets <code>deleted_at</code> and keeps the snapshot for recovery. <code>?purge=true</code> deletes all of the sandbox's snapshots and its row (cascading to executions) at once, without snapshotting. If any step fails, nothing changes and the caller can retry, or purge.</p>
+
+  <h3>Garbage collection</h3>
+  <p><code>gc.go</code> runs every minute in every replica, but each pass first takes <code>pg_try_advisory_xact_lock(0x5ADB0C5)</code>, so only one replica collects at a time. A pass deletes, for rows whose <code>deleted_at</code> or <code>expires_at</code> is older than the retention: the Sandbox (if still there), every object under the sandbox's S3 prefix (a legacy sandbox's PVC instead), then the row. The bucket's lifecycle rule (10 days, and incomplete multipart uploads after one) is only a backstop.</p>
+</section>
+
+<!-- ───────────────────────────── 5 ───────────────────────────── -->
+<section id="pod">
+  <h2><span class="num">05</span>Inside a sandbox pod</h2>
+  <p>Each pod has exactly one user container, always named <code>sandbox</code> (<code>userContainerName</code>), annotated as <code>kubectl.kubernetes.io/default-container</code> and labelled <code>webapp/sandbox-id</code>. There is no sidecar: file I/O is done from outside the pod by the agent on its node, so it works with any user image (even one without a shell or tar) and never runs inside the user's container.</p>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 400" role="img" aria-labelledby="d4t">
+        <title id="d4t">Anatomy of a sandbox pod, its emptyDir volumes and the node agent</title>
+        <rect class="zone-sb" x="20" y="20" width="560" height="360" rx="10"/>
+        <text class="zl" x="36" y="44">Pod sbx-&lt;id&gt; · namespace sandboxes</text>
+
+        <rect class="box" x="40" y="60" width="250" height="168" rx="6"/>
+        <text class="t" x="54" y="82">wait · init container</text>
+        <text class="s" x="54" y="102">only if gated: stage_files, or after a pause</text>
+        <text class="s" x="54" y="120">busybox:1.36 · runs as nobody</text>
+        <text class="s" x="54" y="138">no capabilities · read-only rootfs</text>
+        <text class="s" x="54" y="156">requests 5m / 4Mi · limits 100m / 16Mi</text>
+        <text class="ms" x="54" y="180">until [ -e /control/ready ]; sleep 0.2</text>
+        <text class="ms" x="54" y="200">mount: sandbox-control → /control (ro)</text>
+
+        <rect class="sb" x="314" y="60" width="250" height="168" rx="6"/>
+        <text class="t" x="328" y="82">sandbox · user container</text>
+        <text class="s" x="328" y="102">your image, command, args, env</text>
+        <text class="s" x="328" y="120">resources from request or LimitRange</text>
+        <text class="s" x="328" y="138">starts after init containers finish</text>
+        <text class="s" x="328" y="156">target of every execution</text>
+        <text class="ms" x="328" y="200">mount: workspace → /workspace</text>
+        <path class="e" d="M290 144 H312" marker-end="url(#ah)"/>
+        <text class="ms halo" x="301" y="136" text-anchor="middle">gates</text>
+
+        <rect class="box" x="40" y="256" width="524" height="104" rx="6"/>
+        <text class="t" x="54" y="278">Pod spec</text>
+        <text class="ms" x="54" y="298">automountServiceAccountToken: false · enableServiceLinks: false</text>
+        <text class="ms" x="54" y="316">terminationGracePeriodSeconds: 5</text>
+        <text class="ms" x="54" y="334">labels: webapp/sandbox-id · default-container: sandbox</text>
+        <text class="ms" x="54" y="352">volumes: emptyDir sandbox-workspace 1Gi, sandbox-control 1Mi</text>
+
+        <rect class="db" x="612" y="40" width="200" height="104" rx="8"/>
+        <text class="t" x="626" y="64">emptyDir sandbox-workspace</text>
+        <text class="s" x="626" y="84">sizeLimit 1Gi, on node disk</text>
+        <text class="s" x="626" y="100">the user's /workspace</text>
+        <text class="s" x="626" y="116">deleted with the pod</text>
+        <rect class="db" x="612" y="168" width="200" height="76" rx="8"/>
+        <text class="t" x="626" y="192">emptyDir sandbox-control</text>
+        <text class="s" x="626" y="212">ready marker, written by</text>
+        <text class="s" x="626" y="228">the agent only</text>
+        <path class="e" d="M564 100 H610" marker-end="url(#ah)"/>
+        <path class="e" d="M165 228 V246 H590 V206 H610" marker-end="url(#ah)"/>
+
+        <rect class="cp" x="840" y="40" width="140" height="204" rx="8"/>
+        <text class="t" x="910" y="64" text-anchor="middle">sandbox-agent</text>
+        <text class="s" x="910" y="84" text-anchor="middle">same node</text>
+        <text class="s" x="910" y="108" text-anchor="middle">reaches both via</text>
+        <text class="ms" x="910" y="126" text-anchor="middle">/var/lib/kubelet/</text>
+        <text class="ms" x="910" y="142" text-anchor="middle">pods/&lt;uid&gt;/volumes</text>
+        <text class="s" x="910" y="168" text-anchor="middle">files · snapshot</text>
+        <text class="s" x="910" y="184" text-anchor="middle">restore · ready</text>
+        <path class="e" d="M838 92 H814" marker-end="url(#ah)"/>
+        <path class="e" d="M838 206 H814" marker-end="url(#ah)"/>
+
+        <text class="s" x="612" y="290">The emptyDirs exist from the moment the pod is</text>
+        <text class="s" x="612" y="306">scheduled, before any container starts, so the</text>
+        <text class="s" x="612" y="322">agent can stage or restore files while wait holds</text>
+        <text class="s" x="612" y="338">the user container back. What survives the pod</text>
+        <text class="s" x="612" y="354">is the snapshot in S3.</text>
+      </svg>
+    </div>
+    <figcaption><b>Pod anatomy.</b> The <code>wait</code> init container is added at create when files are staged, and to the Sandbox's pod template on the first pause, so every later pod waits for its restore. Kubernetes runs init containers to completion before regular containers, so the user command only ever sees a fully staged or restored workspace. The control volume is on disk rather than tmpfs because the agent sees it through the host's kubelet directory, which would not show mounts made after the agent started.</figcaption>
+  </figure>
+</section>
+
+<!-- ───────────────────────────── 6 ───────────────────────────── -->
+<section id="executions">
+  <h2><span class="num">06</span>Executions</h2>
+  <p>An execution is one argv run in the <code>sandbox</code> container. A sandbox can have any number of them, including several at once. The HTTP request stays open until the command finishes; the row is written as <code>running</code> first so the execution is visible while it runs, and the final update uses a context that survives client disconnects.</p>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 540" role="img" aria-labelledby="d5t">
+        <title id="d5t">Sequence diagram for running an execution</title>
+        <rect class="box" x="20" y="20" width="120" height="40" rx="6"/><text class="t" x="80" y="45" text-anchor="middle">SDK</text>
+        <rect class="cp" x="195" y="20" width="130" height="40" rx="6"/><text class="t" x="260" y="45" text-anchor="middle">sandbox-manager</text>
+        <rect class="db" x="390" y="20" width="120" height="40" rx="6"/><text class="t" x="450" y="45" text-anchor="middle">Postgres</text>
+        <rect class="cp" x="570" y="20" width="140" height="40" rx="6"/><text class="t" x="640" y="45" text-anchor="middle">K8s API · kubelet</text>
+        <rect class="sb" x="810" y="20" width="150" height="40" rx="6"/><text class="t" x="885" y="45" text-anchor="middle">sandbox container</text>
+        <line class="life" x1="80" y1="60" x2="80" y2="520"/>
+        <line class="life" x1="260" y1="60" x2="260" y2="520"/>
+        <line class="life" x1="450" y1="60" x2="450" y2="520"/>
+        <line class="life" x1="640" y1="60" x2="640" y2="520"/>
+        <line class="life" x1="885" y1="60" x2="885" y2="520"/>
+
+        <line class="e" x1="80" y1="92" x2="258" y2="92" marker-end="url(#ah)"/>
+        <text class="m halo" x="170" y="85" text-anchor="middle">POST /sandbox/executions</text>
+        <line class="e" x1="260" y1="126" x2="448" y2="126" marker-end="url(#ah)"/>
+        <text class="m halo" x="355" y="119" text-anchor="middle">load sandbox row</text>
+        <line class="e" x1="260" y1="164" x2="638" y2="164" marker-end="url(#ah)"/>
+        <text class="m halo" x="450" y="157" text-anchor="middle">GET Sandbox · list pods by status.selector</text>
+        <text class="s halo" x="450" y="180" text-anchor="middle">pick the pod whose controller owner UID matches; not Ready or no running pod → 409</text>
+        <line class="e" x1="260" y1="214" x2="448" y2="214" marker-end="url(#ah)"/>
+        <text class="m halo" x="355" y="207" text-anchor="middle">UPDATE expires_at = GREATEST(…)</text>
+        <text class="s halo" x="355" y="230" text-anchor="middle">row lock serializes concurrent execs</text>
+        <line class="e" x1="260" y1="262" x2="638" y2="262" marker-end="url(#ah)"/>
+        <text class="m halo" x="450" y="255" text-anchor="middle">PATCH spec.shutdownTime, then COMMIT</text>
+        <line class="e" x1="260" y1="300" x2="448" y2="300" marker-end="url(#ah)"/>
+        <text class="m halo" x="355" y="293" text-anchor="middle">INSERT status = running</text>
+        <line class="e" x1="260" y1="338" x2="638" y2="338" marker-end="url(#ah)"/>
+        <text class="m halo" x="450" y="331" text-anchor="middle">pods/exec (WebSocket, SPDY fallback)</text>
+        <line class="e" x1="640" y1="372" x2="883" y2="372" marker-end="url(#ah)"/>
+        <text class="m halo" x="762" y="365" text-anchor="middle">run argv (+ stdin)</text>
+        <line class="e d" x1="885" y1="406" x2="262" y2="406" marker-end="url(#ah)"/>
+        <text class="m halo" x="572" y="399" text-anchor="middle">stdout · stderr (each capped at 1 MiB) · exit code</text>
+        <line class="e" x1="260" y1="444" x2="448" y2="444" marker-end="url(#ah)"/>
+        <text class="m halo" x="355" y="437" text-anchor="middle">UPDATE status, exit_code, output</text>
+        <line class="e d" x1="260" y1="482" x2="82" y2="482" marker-end="url(#ah)"/>
+        <text class="m halo" x="170" y="475" text-anchor="middle">200 execution</text>
+        <text class="s" x="270" y="500">+ sandbox_expires_at · exec stream failure → 502 with execution_id</text>
+      </svg>
+    </div>
+    <figcaption><b>Execution sequence.</b> Exec goes through the API server to the kubelet, so it works under the NetworkPolicy that blocks all ingress to sandbox pods.</figcaption>
+  </figure>
+  <div class="tbl"><table>
+    <thead><tr><th>Outcome</th><th><code>status</code></th><th>HTTP</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Command exits 0</td><td><code>completed</code></td><td class="num">200</td><td><code>exit_code: 0</code></td></tr>
+      <tr><td>Command exits non-zero</td><td><code>completed</code></td><td class="num">200</td><td>The execution happened; the caller reads <code>exit_code</code>.</td></tr>
+      <tr><td>Timeout reached</td><td><code>timed_out</code></td><td class="num">200</td><td>The stream closes but the process may keep running in the container.</td></tr>
+      <tr><td>Exec stream failed</td><td><code>error</code></td><td class="num">502</td><td>Row is still recorded; body includes <code>execution_id</code>.</td></tr>
+      <tr><td>Sandbox not ready / gone</td><td>no row</td><td class="num">409</td><td>Checked before anything is written.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────────── 7 ───────────────────────────── -->
+<section id="files">
+  <h2><span class="num">07</span>Files and snapshots</h2>
+  <p>Paths in the API are relative to <code>/workspace</code> (a leading <code>/workspace/</code> is accepted). A running sandbox's files are read and written by the agent on its pod's node; a paused or gone sandbox's files come from its latest snapshot in S3, a tar of the whole workspace.</p>
+  <h3>Where a file request is served from</h3>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 470" role="img" aria-labelledby="d6t">
+        <title id="d6t">Flowchart for routing a file request to the agent or to the snapshot</title>
+        <rect class="box" x="20" y="190" width="120" height="44" rx="22"/>
+        <text class="t" x="80" y="217" text-anchor="middle">File request</text>
+        <rect class="box" x="170" y="184" width="140" height="56" rx="6"/>
+        <text class="t" x="240" y="207" text-anchor="middle">Legacy PVC?</text>
+        <text class="s" x="240" y="225" text-anchor="middle">volume_name set</text>
+        <rect class="box" x="340" y="184" width="150" height="56" rx="6"/>
+        <text class="t" x="415" y="207" text-anchor="middle">Paused or gone?</text>
+        <text class="s" x="415" y="225" text-anchor="middle">row, live Sandbox</text>
+        <path class="e" d="M140 212 H168" marker-end="url(#ah)"/>
+        <path class="e" d="M310 212 H338" marker-end="url(#ah)"/>
+        <text class="ms halo" x="324" y="204" text-anchor="middle">no</text>
+
+        <rect class="err" x="170" y="310" width="140" height="50" rx="6"/>
+        <text class="t warn" x="240" y="332" text-anchor="middle">409 Conflict</text>
+        <text class="s" x="240" y="349" text-anchor="middle">older version</text>
+        <path class="e" d="M240 240 V308" marker-end="url(#ah)"/>
+        <text class="ms halo" x="248" y="276">yes</text>
+
+        <rect class="box" x="520" y="40" width="200" height="72" rx="6"/>
+        <text class="t" x="534" y="62">Wait for the pod</text>
+        <text class="s" x="534" y="80">initialized, or waiting while staging</text>
+        <text class="s" x="534" y="96">poll 0.5 s, ≤ 90 s, then 409</text>
+        <rect class="cp" x="752" y="40" width="228" height="72" rx="6"/>
+        <text class="t" x="766" y="62">Agent on the pod's node</text>
+        <text class="s" x="766" y="80">HTTP + bearer token, streamed</text>
+        <text class="s" x="766" y="96">os.Root: never leaves /workspace</text>
+        <path class="e" d="M415 184 V76 H518" marker-end="url(#ah)"/>
+        <text class="ms halo" x="423" y="130">no</text>
+        <path class="e" d="M720 76 H750" marker-end="url(#ah)"/>
+
+        <rect class="box" x="540" y="184" width="130" height="56" rx="6"/>
+        <text class="t" x="605" y="207" text-anchor="middle">Write?</text>
+        <text class="s" x="605" y="225" text-anchor="middle">PUT · POST · DELETE</text>
+        <path class="e" d="M490 212 H538" marker-end="url(#ah)"/>
+        <text class="ms halo" x="514" y="204" text-anchor="middle">yes</text>
+        <rect class="box" x="710" y="184" width="120" height="56" rx="6"/>
+        <text class="t" x="770" y="207" text-anchor="middle">Retained?</text>
+        <text class="s" x="770" y="225" text-anchor="middle">snapshot, window</text>
+        <path class="e" d="M670 212 H708" marker-end="url(#ah)"/>
+        <text class="ms halo" x="689" y="204" text-anchor="middle">no</text>
+        <rect class="db" x="860" y="178" width="120" height="68" rx="6"/>
+        <text class="t" x="920" y="200" text-anchor="middle">Read the</text>
+        <text class="t" x="920" y="216" text-anchor="middle">snapshot</text>
+        <text class="s" x="920" y="234" text-anchor="middle">one pass over S3</text>
+        <path class="e" d="M830 212 H858" marker-end="url(#ah)"/>
+        <text class="ms halo" x="844" y="204" text-anchor="middle">yes</text>
+        <rect class="err" x="710" y="300" width="120" height="50" rx="6"/>
+        <text class="t warn" x="770" y="322" text-anchor="middle">410 Gone</text>
+        <text class="s" x="770" y="339" text-anchor="middle">nothing kept</text>
+        <path class="e" d="M770 240 V298" marker-end="url(#ah)"/>
+        <text class="ms halo" x="778" y="272">no</text>
+
+        <rect class="box" x="540" y="300" width="130" height="56" rx="6"/>
+        <text class="t" x="605" y="323" text-anchor="middle">Paused?</text>
+        <text class="s" x="605" y="341" text-anchor="middle">not gone</text>
+        <path class="e" d="M605 240 V298" marker-end="url(#ah)"/>
+        <text class="ms halo" x="613" y="272">yes</text>
+        <rect class="err" x="340" y="303" width="150" height="50" rx="6"/>
+        <text class="t warn" x="415" y="325" text-anchor="middle">409 Conflict</text>
+        <text class="s" x="415" y="342" text-anchor="middle">gone: read-only</text>
+        <path class="e" d="M540 328 H492" marker-end="url(#ah)"/>
+        <text class="ms halo" x="516" y="320" text-anchor="middle">no</text>
+        <rect class="db" x="700" y="384" width="280" height="68" rx="6"/>
+        <text class="t" x="714" y="406">Rewrite the snapshot</text>
+        <text class="s" x="714" y="424">row FOR UPDATE · old entries minus the</text>
+        <text class="s" x="714" y="440">replaced ones, plus the new · new key</text>
+        <path class="e" d="M605 356 V418 H698" marker-end="url(#ah)"/>
+        <text class="ms halo" x="613" y="392">yes</text>
+      </svg>
+    </div>
+    <figcaption><b>File request routing</b> (<code>fileTarget</code> in <code>files.go</code>). Reads keep working for the recovery window after a delete or expiry, so a client can collect results from a sandbox that is gone. Live writes hold the row's <code>KEY SHARE</code> lock, so a pause or delete waits for them and its snapshot includes them.</figcaption>
+  </figure>
+
+  <h3>Operations</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Operation</th><th>Running sandbox (agent)</th><th>Paused or gone (snapshot)</th></tr></thead>
+    <tbody>
+      <tr><td>Tar upload</td><td>Only regular files and directories; names cleaned; any other entry fails the upload. Streamed, limit 10 GiB.</td><td>Paused only: the upload is parked in S3, then the snapshot is rewritten without the files it replaces, plus the upload.</td></tr>
+      <tr><td>PUT file</td><td>Temp file then rename, so readers never see a partial file; parents created; size and SHA-256 returned.</td><td>Paused only, needs a Content-Length. Same response.</td></tr>
+      <tr><td>GET file</td><td>Streams with <code>Content-Length</code>; a directory streams as tar with owners and symlinks.</td><td>One streaming pass over the snapshot. Symlinks are never followed (409).</td></tr>
+      <tr><td>List</td><td>Name, type, size, mode and mtime for every entry, including dotfiles.</td><td>Same, from the tar headers.</td></tr>
+      <tr><td>Delete</td><td>Recursive; a symlink is removed itself, never its target; refuses the workspace root.</td><td>Paused only: rewrite without the entries.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>When snapshots are taken</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Event</th><th>What happens</th></tr></thead>
+    <tbody>
+      <tr><td>Pause</td><td>Snapshot under the row lock, before the pod is deleted. Failure → 502 and the sandbox keeps running.</td></tr>
+      <tr><td>Delete</td><td>Snapshot under the row lock, then delete. <code>?purge=true</code> skips it and deletes all snapshots.</td></tr>
+      <tr><td>Expiry</td><td>A loop (every 10 s) snapshots running sandboxes expiring within 60 s that have no snapshot from that window yet. Activity pushes the expiry out, which re-arms it.</td></tr>
+      <tr><td>Resume, pod replaced</td><td>Restore: the new pod's <code>wait</code> container holds it until the agent has extracted the latest snapshot.</td></tr>
+      <tr><td>Node or pod lost while running</td><td>Nothing is saved: the sandbox comes back with its last snapshot (if it had been paused before), and anything written since is lost.</td></tr>
+    </tbody>
+  </table></div>
+  <p>Only pods past their init containers are snapshotted, so a pod still waiting for its restore can never overwrite a good snapshot with an empty workspace. Measured: a small workspace snapshots in about 60 ms; pause takes about 6 s in all, mostly the pod's 5 s grace period.</p>
+  <div class="callout"><strong>Path safety.</strong> <code>..</code> is removed by cleaning a rooted path. Every live operation goes through Go's <code>os.Root</code> opened on the workspace: symlinks are followed only while they stay inside it, and absolute symlinks (such as <code>/etc/passwd</code> made in the user container) are refused. Restores skip tar entries that would land outside the workspace. The package has unit tests for escapes through symlinks, hostile tar entries and round trips, run on macOS and Linux.</div>
+</section>
+
+<!-- ───────────────────────────── 8 ───────────────────────────── -->
+<section id="data">
+  <h2><span class="num">08</span>Data model</h2>
+  <p>Postgres is the source of truth for what was requested and what ran; the cluster is the source of truth for whether it is running now. Migrations are idempotent <code>CREATE … IF NOT EXISTS</code> / <code>ADD COLUMN IF NOT EXISTS</code> statements run on every start, so new nullable columns mark legacy rows.</p>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 520" role="img" aria-labelledby="d7t">
+        <title id="d7t">Entity relationship diagram of the sandboxes, executions and notes tables</title>
+        <!-- sandboxes -->
+        <rect class="db" x="20" y="20" width="340" height="488" rx="8"/>
+        <text class="t" x="36" y="44">sandboxes</text>
+        <line class="row" x1="20" y1="54" x2="360" y2="54"/>
+        <text class="m" x="36" y="72">sandbox_id</text><text class="ms" x="170" y="72">UUID PK</text>
+        <text class="m" x="36" y="94">name</text><text class="ms" x="170" y="94">TEXT UNIQUE · sbx-&lt;id&gt;</text>
+        <text class="m" x="36" y="116">namespace</text><text class="ms" x="170" y="116">TEXT</text>
+        <text class="m" x="36" y="138">definition</text><text class="ms" x="170" y="138">TEXT · rendered YAML</text>
+        <text class="m" x="36" y="160">created_at</text><text class="ms" x="170" y="160">TIMESTAMPTZ</text>
+        <text class="m" x="36" y="182">ttl_seconds</text><text class="ms" x="170" y="182">INT · NULL = never expires</text>
+        <text class="m" x="36" y="204">expires_at</text><text class="ms" x="170" y="204">TIMESTAMPTZ</text>
+        <text class="m" x="36" y="226">volume_name</text><text class="ms" x="170" y="226">TEXT · legacy PVC only</text>
+        <text class="m" x="36" y="248">volume_size</text><text class="ms" x="170" y="248">TEXT · workspace limit</text>
+        <text class="m" x="36" y="270">deleted_at</text><text class="ms" x="170" y="270">TIMESTAMPTZ · API delete</text>
+        <text class="m" x="36" y="292">stage_files</text><text class="ms" x="170" y="292">BOOL</text>
+        <text class="m" x="36" y="314">staged_at</text><text class="ms" x="170" y="314">TIMESTAMPTZ</text>
+        <text class="m" x="36" y="336">operating_mode</text><text class="ms" x="170" y="336">Running · Suspended</text>
+        <text class="m" x="36" y="358">paused_ttl_seconds</text><text class="ms" x="196" y="358">INT</text>
+        <text class="m" x="36" y="380">paused_at</text><text class="ms" x="170" y="380">TIMESTAMPTZ</text>
+        <text class="m" x="36" y="402">resumed_at</text><text class="ms" x="170" y="402">TIMESTAMPTZ</text>
+        <text class="m" x="36" y="424">snapshot_key</text><text class="ms" x="170" y="424">TEXT · latest S3 key</text>
+        <text class="m" x="36" y="446">snapshot_bytes</text><text class="ms" x="170" y="446">BIGINT</text>
+        <text class="m" x="36" y="468">snapshot_at</text><text class="ms" x="170" y="468">TIMESTAMPTZ</text>
+        <text class="s" x="36" y="494">new columns are nullable: they mark legacy rows</text>
+
+        <!-- executions -->
+        <rect class="db" x="440" y="20" width="340" height="322" rx="8"/>
+        <text class="t" x="456" y="44">executions</text>
+        <line class="row" x1="440" y1="54" x2="780" y2="54"/>
+        <text class="m" x="456" y="72">execution_id</text><text class="ms" x="600" y="72">UUID PK</text>
+        <text class="m" x="456" y="94">sandbox_id</text><text class="ms" x="600" y="94">FK · ON DELETE CASCADE</text>
+        <text class="m" x="456" y="116">pod</text><text class="ms" x="600" y="116">TEXT</text>
+        <text class="m" x="456" y="138">command</text><text class="ms" x="600" y="138">TEXT[] · argv</text>
+        <text class="m" x="456" y="160">status</text><text class="ms" x="600" y="160">running · completed · …</text>
+        <text class="m" x="456" y="182">exit_code</text><text class="ms" x="600" y="182">INT NULL</text>
+        <text class="m" x="456" y="204">stdout / stderr</text><text class="ms" x="600" y="204">TEXT · ≤ 1 MiB each</text>
+        <text class="m" x="456" y="226">*_truncated</text><text class="ms" x="600" y="226">BOOL</text>
+        <text class="m" x="456" y="248">started_at</text><text class="ms" x="600" y="248">TIMESTAMPTZ</text>
+        <text class="m" x="456" y="270">finished_at</text><text class="ms" x="600" y="270">TIMESTAMPTZ NULL</text>
+        <line class="row" x1="440" y1="288" x2="780" y2="288"/>
+        <text class="s" x="456" y="310">index (sandbox_id, started_at)</text>
+
+        <path class="e" d="M360 68 C 400 68, 400 90, 438 90"/>
+        <text class="ms" x="366" y="62">1</text>
+        <path class="e" d="M428 82 L438 90 L428 98"/>
+        <text class="ms" x="420" y="110">n</text>
+
+        <!-- notes -->
+        <rect class="box" x="820" y="20" width="160" height="110" rx="8"/>
+        <text class="t" x="836" y="44">notes</text>
+        <line class="row" x1="820" y1="54" x2="980" y2="54"/>
+        <text class="m" x="836" y="74">id</text><text class="ms" x="890" y="74">BIGSERIAL</text>
+        <text class="m" x="836" y="96">text</text><text class="ms" x="890" y="96">TEXT</text>
+        <text class="m" x="836" y="118">created_at</text>
+        <text class="s" x="820" y="152">legacy demo, unrelated</text>
+      </svg>
+    </div>
+    <figcaption><b>Schema.</b> Live status, <code>files_retained_until</code> and <code>sandbox_expires_at</code> are computed per response and never stored. Deleting a sandbox row deletes its execution history.</figcaption>
+  </figure>
+</section>
+
+<!-- ───────────────────────────── 9 ───────────────────────────── -->
+<section id="sdk">
+  <h2><span class="num">09</span>Python SDK</h2>
+  <p>The SDK (<code>sdk/python</code>, package <code>sandbox_sdk</code>, managed with uv) wraps the API in objects that hold runtime state. It targets Python 3.9, so it keeps <code>from __future__ import annotations</code> and avoids 3.10+ syntax at runtime. The design rule is that sync and async code cannot drift: all request shapes, response parsing, state and validation live in I/O-free shared modules, and the sync and async classes only add the HTTP calls.</p>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 420" role="img" aria-labelledby="d8t">
+        <title id="d8t">Layering of the Python SDK modules</title>
+        <rect class="box" x="20" y="16" width="960" height="36" rx="6"/>
+        <text class="t" x="500" y="39" text-anchor="middle">Your code</text>
+
+        <rect class="zone" x="20" y="76" width="470" height="120" rx="8"/>
+        <text class="zl" x="36" y="98">Sync · sandbox.py · command.py · client.py</text>
+        <rect class="cp" x="36" y="112" width="140" height="66" rx="6"/>
+        <text class="t" x="106" y="140" text-anchor="middle">Sandbox</text>
+        <text class="s" x="106" y="158" text-anchor="middle">create · exec · files</text>
+        <rect class="cp" x="186" y="112" width="140" height="66" rx="6"/>
+        <text class="t" x="256" y="140" text-anchor="middle">Command</text>
+        <text class="s" x="256" y="158" text-anchor="middle">lazy stdout/stderr</text>
+        <rect class="cp" x="336" y="112" width="140" height="66" rx="6"/>
+        <text class="t" x="406" y="140" text-anchor="middle">Client</text>
+        <text class="s" x="406" y="158" text-anchor="middle">dicts in, dicts out</text>
+
+        <rect class="zone" x="510" y="76" width="470" height="120" rx="8"/>
+        <text class="zl" x="526" y="98">Async · async_*.py</text>
+        <rect class="cp" x="526" y="112" width="140" height="66" rx="6"/>
+        <text class="t" x="596" y="140" text-anchor="middle">AsyncSandbox</text>
+        <text class="s" x="596" y="158" text-anchor="middle">same, awaitable</text>
+        <rect class="cp" x="676" y="112" width="140" height="66" rx="6"/>
+        <text class="t" x="746" y="140" text-anchor="middle">AsyncCommand</text>
+        <text class="s" x="746" y="158" text-anchor="middle">explicit refresh()</text>
+        <rect class="cp" x="826" y="112" width="140" height="66" rx="6"/>
+        <text class="t" x="896" y="140" text-anchor="middle">AsyncClient</text>
+        <text class="s" x="896" y="158" text-anchor="middle">one per event loop</text>
+
+        <path class="e" d="M255 196 V228" marker-end="url(#ah)"/>
+        <path class="e" d="M745 196 V228" marker-end="url(#ah)"/>
+
+        <rect class="zone" x="20" y="232" width="960" height="112" rx="8"/>
+        <text class="zl" x="36" y="252">Shared, I/O-free</text>
+        <rect class="db" x="36" y="262" width="224" height="70" rx="6"/>
+        <text class="t" x="148" y="286" text-anchor="middle">_models.py</text>
+        <text class="s" x="148" y="304" text-anchor="middle">SandboxBase · CommandBase</text>
+        <text class="s" x="148" y="320" text-anchor="middle">Resources · FileInfo · statuses</text>
+        <rect class="db" x="272" y="262" width="224" height="70" rx="6"/>
+        <text class="t" x="384" y="286" text-anchor="middle">_api.py</text>
+        <text class="s" x="384" y="304" text-anchor="middle">one APIRequest per endpoint</text>
+        <text class="s" x="384" y="320" text-anchor="middle">parse_response · base URL</text>
+        <rect class="db" x="508" y="262" width="224" height="70" rx="6"/>
+        <text class="t" x="620" y="286" text-anchor="middle">_files.py</text>
+        <text class="s" x="620" y="304" text-anchor="middle">plan_upload · tar_chunks</text>
+        <text class="s" x="620" y="320" text-anchor="middle">safe extract_tar (local disk only)</text>
+        <rect class="db" x="744" y="262" width="224" height="70" rx="6"/>
+        <text class="t" x="856" y="286" text-anchor="middle">errors.py · _time.py</text>
+        <text class="s" x="856" y="304" text-anchor="middle">status → exception mapping</text>
+        <text class="s" x="856" y="320" text-anchor="middle">3.9-safe timestamp parsing</text>
+
+        <path class="e" d="M384 344 V372" marker-end="url(#ah)"/>
+        <rect class="box" x="20" y="374" width="960" height="36" rx="6"/>
+        <text class="t" x="500" y="397" text-anchor="middle">httpx → SandboxManager HTTP API ($SANDBOX_API_URL, default http://localhost:8080)</text>
+      </svg>
+    </div>
+    <figcaption><b>SDK layering.</b> The clients send an <code>APIRequest</code> and hand the response back to <code>parse_response</code>; neither knows endpoint details. Async runs the blocking disk parts of <code>_files.py</code> through <code>asyncio.to_thread</code>.</figcaption>
+  </figure>
+
+  <h3>Typical use</h3>
+<pre><code>from sandbox_sdk import Sandbox, Resources
+
+with Sandbox("python:3.12-slim",
+             command=["sleep", "infinity"],
+             resources=Resources(limits={"memory": "128Mi"}),
+             ttl=600,
+             files={"./src/": "src/"}) as sb:      # uploaded before the command starts
+    cmd = sb.exec("python /workspace/src/main.py")  # string → sh -c
+    cmd.check()                                     # raise unless exit 0
+    sb.download("out/", "./results/")               # directory comes back as tar, extracted safely</code></pre>
+
+  <h3>What <code>create()</code> does</h3>
+  <ol>
+    <li>With <code>files=</code>, plans the upload first, so missing local paths or bad destinations raise before any request.</li>
+    <li><code>POST /sandboxes</code> (adding <code>stage_files: true</code> when there are files).</li>
+    <li>Streams one tar built from disk on the fly (<code>tar_chunks</code>, 1 MiB pieces), then <code>POST /staging/complete</code>. If either fails, the sandbox is purged and the error re-raised.</li>
+    <li>Unless <code>wait=False</code>, polls <code>GET /sandboxes/{id}</code> every 0.5 s until <code>Ready</code> (default timeout 120 s). Terminal statuses raise <code>SandboxError</code>; the deadline raises <code>SandboxTimeoutError</code>.</li>
+  </ol>
+
+  <h3>Errors</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>HTTP</th><th>Exception</th><th>Typical cause</th></tr></thead>
+    <tbody>
+      <tr><td class="num">400</td><td><code>BadRequestError</code></td><td>Bad image, env name, resource quantity, TTL; path escapes workspace.</td></tr>
+      <tr><td class="num">404</td><td><code>NotFoundError</code></td><td>Unknown sandbox or execution. <code>delete()</code> treats it as already gone.</td></tr>
+      <tr><td class="num">409</td><td><code>ConflictError</code></td><td>Sandbox not ready, gone (writes and execs), or its pod not up yet. Exec on a paused sandbox raises the subclass <code>SandboxPausedError</code>.</td></tr>
+      <tr><td class="num">429</td><td><code>QuotaExceededError</code></td><td>Namespace quota (pods, CPU or memory) is full.</td></tr>
+      <tr><td class="num">502 + id</td><td><code>ExecutionFailedError</code></td><td>Exec stream failed; carries <code>execution_id</code>.</td></tr>
+      <tr><td class="num">other</td><td><code>APIError</code></td><td>Base class with <code>status_code</code>, <code>message</code>, <code>body</code>.</td></tr>
+      <tr><td class="num">—</td><td><code>SandboxConnectionError</code></td><td>API unreachable (transport error).</td></tr>
+      <tr><td class="num">—</td><td><code>CommandError</code></td><td>Raised by <code>Command.check()</code> on non-zero exit or timeout.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Sync and async differences</h3>
+  <ul>
+    <li><strong>Listed command output.</strong> <code>Command.stdout</code> on a listed command fetches output lazily. Properties cannot await, so the same access on an <code>AsyncCommand</code> raises <code>OutputNotLoadedError</code> until <code>await cmd.refresh()</code>, or list with <code>commands(with_output=True)</code>.</li>
+    <li><strong>Clients.</strong> The sync SDK has a process-wide default client. Async has none, because a client belongs to one event loop; an <code>AsyncSandbox</code> without a client opens its own and closes it on <code>delete()</code>, <code>aclose()</code> or leaving <code>async with</code>.</li>
+    <li><strong>Cancellation.</strong> Cancelling an awaiting <code>exec()</code> closes the request; the server still records the result, and the process may keep running.</li>
+  </ul>
+  <p>The SDK must track the Go API: when endpoints or JSON fields change, update <code>_api.py</code>, both client classes, <code>_models.py</code>, and the in-memory fake in <code>tests/fake_api.py</code>.</p>
+</section>
+
+<!-- ───────────────────────────── 10 ───────────────────────────── -->
+<section id="isolation">
+  <h2><span class="num">10</span>Isolation and limits</h2>
+  <div class="cols">
+    <div class="card">
+      <h4>Network: sandbox-isolation</h4>
+      <ul>
+        <li>Ingress: none.</li>
+        <li>Egress: kube-dns on 53, and <code>0.0.0.0/0</code> minus 10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16.</li>
+        <li>So no other pods, the API, Postgres, the Kubernetes API, the node or metadata addresses.</li>
+        <li>Enforced by k3s's built-in policy controller. <strong>Not enforced on EKS yet:</strong> the VPC CNI's network-policy mode is off.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Pod hardening</h4>
+      <ul>
+        <li>No service-account token, no service-link env vars.</li>
+        <li><code>wait</code> container: nobody, no capabilities, read-only rootfs.</li>
+        <li>Executions only target the <code>sandbox</code> container.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Node agent</h4>
+      <ul>
+        <li>Mounts the kubelet's pods directory, which also holds other pods' Secrets and tokens on the node: keep it small.</li>
+        <li>Every caller needs the bearer token; on EKS that is the only check (a sandbox gets 401).</li>
+        <li>Root with CHOWN, DAC_OVERRIDE, DAC_READ_SEARCH, FOWNER, FSETID; read-only rootfs; no Kubernetes token.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Eviction order</h4>
+      <ul>
+        <li>Postgres, the API and the agents have PriorityClass <code>sandbox-control-plane</code> (1,000,000).</li>
+        <li>They request well above real use (~35Mi and ~10Mi), so the kubelet evicts sandbox pods first under memory pressure.</li>
+        <li>kube-system and agent-sandbox-system are not covered.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Quota and defaults in namespace sandboxes</h3>
+  <p>Sized for the 2 CPU / 2 GiB Colima VM, about half of which goes to k3s and system pods. Raise these with the VM.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Object</th><th>Setting</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="4">ResourceQuota</td><td>pods</td><td class="num">20</td></tr>
+      <tr><td>requests.cpu / requests.memory</td><td class="num">1 / 512Mi</td></tr>
+      <tr><td>limits.memory</td><td class="num">768Mi</td></tr>
+      <tr><td>persistentvolumeclaims / requests.storage (legacy sandboxes only)</td><td class="num">40 / 40Gi</td></tr>
+      <tr><td rowspan="3">LimitRange (per container)</td><td>default request</td><td class="num">25m / 32Mi</td></tr>
+      <tr><td>default limit</td><td class="num">500m / 64Mi</td></tr>
+      <tr><td>max</td><td class="num">1 CPU / 512Mi</td></tr>
+    </tbody>
+  </table></div>
+  <p>With defaults, <code>limits.memory</code> allows 12 sandboxes at once (768Mi ÷ 64Mi; the <code>wait</code> container doesn't add to that, since init containers count only up to the largest one). The quota was sized for a 2 CPU / 2 GiB VM and kept for comparable benchmarks. Retained snapshots live in S3 and no longer count against any quota; each workspace emptyDir is capped at 1Gi by eviction.</p>
+
+  <h3>RBAC for the sandbox-manager service account</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Namespace</th><th>Resource</th><th>Verbs</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>sandboxes</td><td><code>sandboxes.agents.x-k8s.io</code></td><td>create get list patch delete</td><td>Lifecycle; patch for TTL.</td></tr>
+      <tr><td>sandboxes</td><td><code>pods</code></td><td>create get list delete</td><td>Dry-run admission, find a sandbox's pod, pods waiting for a restore; delete a legacy recovery pod.</td></tr>
+      <tr><td>sandboxes</td><td><code>pods/exec</code></td><td>create get</td><td>Executions.</td></tr>
+      <tr><td>sandboxes</td><td><code>persistentvolumeclaims</code></td><td>get delete</td><td>Legacy sandboxes' volumes.</td></tr>
+      <tr><td>webapp</td><td>sandboxes, pods, pods/exec</td><td>create get list delete</td><td>Find the agent on a node; legacy sandboxes created there.</td></tr>
+      <tr><td>—</td><td>sandbox-agent SA</td><td>none</td><td>No token mounted; S3 access only, via Pod Identity.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────────── 11 ───────────────────────────── -->
+<section id="deploy">
+  <h2><span class="num">11</span>Build and deploy</h2>
+  <p><code>./deploy-eks.sh</code> builds both binaries on the host for linux/amd64 and assembles the images with crane (a binary layer on distroless) instead of <code>docker build</code>: the local Docker's legacy builder pushes layers that EKS's containerd rejects ("wrong diff id"). <code>deploy.sh</code> still targets the local k3d cluster with the older design.</p>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 150" role="img" aria-labelledby="d9t">
+        <title id="d9t">EKS deploy pipeline steps</title>
+        <g>
+          <rect class="box" x="20" y="20" width="150" height="100" rx="6"/>
+          <text class="ms" x="34" y="40">1</text>
+          <text class="t" x="34" y="62">go build × 2</text>
+          <text class="s" x="34" y="82">linux/amd64, static</text>
+          <text class="s" x="34" y="98">sandbox-manager</text>
+          <text class="s" x="34" y="114">sandbox-agent</text>
+        </g>
+        <g>
+          <rect class="box" x="182" y="20" width="150" height="100" rx="6"/>
+          <text class="ms" x="196" y="40">2</text>
+          <text class="t" x="196" y="62">crane → ECR</text>
+          <text class="s" x="196" y="82">distroless static</text>
+          <text class="s" x="196" y="98">API nonroot,</text>
+          <text class="s" x="196" y="114">agent root</text>
+        </g>
+        <g>
+          <rect class="db" x="344" y="20" width="150" height="100" rx="6"/>
+          <text class="ms" x="358" y="40">3</text>
+          <text class="t" x="358" y="62">Secrets, ConfigMap</text>
+          <text class="s" x="358" y="82">postgres, sandbox-agent</text>
+          <text class="s" x="358" y="98">(once) · snapshots</text>
+          <text class="s" x="358" y="114">bucket and region</text>
+        </g>
+        <g>
+          <rect class="box" x="506" y="20" width="150" height="100" rx="6"/>
+          <text class="ms" x="520" y="40">4</text>
+          <text class="t" x="520" y="62">render k8s/</text>
+          <text class="s" x="520" y="82">ECR image tags,</text>
+          <text class="s" x="520" y="98">IfNotPresent</text>
+        </g>
+        <g>
+          <rect class="cp" x="668" y="20" width="150" height="100" rx="6"/>
+          <text class="ms" x="682" y="40">5</text>
+          <text class="t" x="682" y="62">kubectl apply</text>
+          <text class="s" x="682" y="82">cluster.yaml first</text>
+          <text class="s" x="682" y="98">then k8s/</text>
+        </g>
+        <g>
+          <rect class="cp" x="830" y="20" width="150" height="100" rx="6"/>
+          <text class="ms" x="844" y="40">6</text>
+          <text class="t" x="844" y="62">rollout</text>
+          <text class="s" x="844" y="82">postgres, agents,</text>
+          <text class="s" x="844" y="98">then the API</text>
+        </g>
+        <path class="e" d="M170 70 H180" marker-end="url(#ah)"/>
+        <path class="e" d="M332 70 H342" marker-end="url(#ah)"/>
+        <path class="e" d="M494 70 H504" marker-end="url(#ah)"/>
+        <path class="e" d="M656 70 H666" marker-end="url(#ah)"/>
+        <path class="e" d="M818 70 H828" marker-end="url(#ah)"/>
+      </svg>
+    </div>
+    <figcaption><b>deploy-eks.sh.</b> <code>cluster.yaml</code> (PriorityClass and the <code>sandboxes</code> namespace) is applied first because the other manifests refer to it. Deleting the Postgres Secret while keeping its PVC breaks app login, since the data directory keeps the old password.</figcaption>
+  </figure>
+  <h3>One-time AWS setup</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Piece</th><th>Setting</th></tr></thead>
+    <tbody>
+      <tr><td>EKS add-ons</td><td><code>aws-ebs-csi-driver</code> (gp3 StorageClass for Postgres), <code>eks-pod-identity-agent</code>.</td></tr>
+      <tr><td>S3 bucket</td><td><code>&lt;cluster&gt;-snapshots-&lt;account-id&gt;</code>: public access blocked, SSE-S3, lifecycle 10 days on <code>sandboxes/</code>, abort incomplete multipart uploads after 1 day.</td></tr>
+      <tr><td>IAM role</td><td><code>&lt;cluster&gt;-sandbox-snapshots</code>: get, put, delete and abort on <code>sandboxes/*</code>, list with that prefix; Pod Identity associations for <code>webapp/sandbox-manager</code> and <code>webapp/sandbox-agent</code>.</td></tr>
+      <tr><td>ECR</td><td>Repositories <code>sandbox-manager</code> and <code>sandbox-agent</code>; nodes pull with their instance role.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Manifest</th><th>Contents</th></tr></thead>
+    <tbody>
+      <tr><td><code>k8s/cluster.yaml</code></td><td>PriorityClass <code>sandbox-control-plane</code>, Namespace <code>sandboxes</code>.</td></tr>
+      <tr><td><code>k8s/postgres.yaml</code></td><td>Service <code>postgres:5432</code>, StatefulSet <code>postgres</code> (postgres:17-alpine, <code>pg_isready</code> probe, 1Gi PVC).</td></tr>
+      <tr><td><code>k8s/sandbox-manager.yaml</code></td><td>ServiceAccount, Role/RoleBinding in <code>webapp</code>, Deployment (2 replicas, <code>/healthz</code> readiness, bucket and token from the ConfigMap and Secret), Service <code>:80 → 8080</code>.</td></tr>
+      <tr><td><code>k8s/agent.yaml</code></td><td>ServiceAccount without token, DaemonSet <code>sandbox-agent</code> (tolerates every taint, hostPath kubelet pods directory), NetworkPolicy allowing only the API.</td></tr>
+      <tr><td><code>k8s/sandboxes.yaml</code></td><td>ResourceQuota, LimitRange, NetworkPolicy <code>sandbox-isolation</code>, Role/RoleBinding.</td></tr>
+    </tbody>
+  </table></div>
+  <p>Runtime configuration: <code>DATABASE_URL</code> (required), <code>SNAPSHOT_BUCKET</code> and <code>AWS_REGION</code> (required; optional <code>SNAPSHOT_PREFIX</code>, <code>S3_ENDPOINT</code>), <code>AGENT_TOKEN</code> (required), <code>AGENT_NAMESPACE</code> (webapp), <code>AGENT_PORT</code> (8090), <code>PORT</code> (8080), <code>SANDBOX_NAMESPACE</code>, <code>VOLUME_RETENTION</code> (12h). The agent reads <code>AGENT_TOKEN</code>, the snapshot settings and <code>PODS_DIR</code>.</p>
+</section>
+
+<!-- ───────────────────────────── 12 ───────────────────────────── -->
+<section id="ops">
+  <h2><span class="num">12</span>Operations and testing</h2>
+<pre><code>kubectl -n webapp port-forward svc/sandbox-manager 8081:80   # reach the API
+kubectl -n webapp exec -it postgres-0 -- psql -U webapp       # DB shell
+tools/dbinspect.py check                                      # DB vs cluster, exit 1 on problems</code></pre>
+  <h3>dbinspect</h3>
+  <p>Standard-library Python 3.9. Runs queries via <code>kubectl exec</code> into <code>postgres-0</code> with <code>default_transaction_read_only=on</code>, so it cannot modify data. Subcommands: <code>overview</code>, <code>schema</code> (with per-column meanings in <code>TABLE_DOCS</code>), <code>sandboxes [--status]</code>, <code>sandbox &lt;prefix&gt;</code>, <code>executions</code>, <code>execution &lt;prefix&gt;</code>, <code>check</code>, <code>sql "SELECT …"</code>.</p>
+
+  <h3>Tests</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Suite</th><th>Runs against</th><th>Covers</th></tr></thead>
+    <tbody>
+      <tr><td><code>test_sdk.py</code>, <code>test_async.py</code>, <code>test_files.py</code></td><td>In-memory fake API (<code>httpx.MockTransport</code>)</td><td>Sync and async object behaviour, files planning, tar streaming and safe extraction. <code>uv run pytest</code>.</td></tr>
+      <tr><td><code>go test ./internal/...</code></td><td>Temp directories</td><td>Workspace operations: symlink escapes, hostile tar entries, archive and restore round trips, snapshot reads after rewrites. Also run on Linux in a container.</td></tr>
+      <tr><td><code>test_integration.py</code></td><td>Live cluster</td><td>End-to-end lifecycle, files, staging, pause and resume with paused writes. <code>SANDBOX_API_URL=… uv run pytest -m integration</code>. Passes on EKS.</td></tr>
+      <tr><td><code>test_isolation.py</code></td><td>Live cluster</td><td>Two sandboxes: no network path between them, no access to the control plane, DNS and public egress still work, no Kubernetes credentials, separate filesystems, processes, env and execution history. Every blocked check has a positive control. Fails on EKS until NetworkPolicy is enforced there.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Benchmarks</h3>
+  <p><code>uv run python bench/create_bench.py latency|throughput|all [--out f.json]</code> from <code>sdk/python</code>, with the API port-forwarded. Results and charts are in <a href="#bench">Benchmarks</a>.</p>
+</section>
+
+<!-- ───────────────────────────── 13 ───────────────────────────── -->
+<section id="bench">
+  <h2><span class="num">13</span>Benchmarks: storage and start time</h2>
+  <p>Three ways of giving each sandbox its <code>/workspace</code>, benchmarked with the same API build, quota, LimitRange and agent-sandbox controller (v1.0.7) on 2026-10-22: per-sandbox PVCs with a pool of 3 ready volumes on the local k3d cluster and on EKS (EBS), and the current design, emptyDir plus node agent and S3 snapshots, on EKS. A fourth run on EKS used one EFS access point per sandbox; it is in the text and tables but not the charts, which are capped at three series. Run with <code>uv run python bench/create_bench.py all --levels 1,2,4,8,12 --out f.json</code> from <code>sdk/python</code>; the benchmark purges on delete, so it measures no delete snapshots.</p>
+  <div class="tbl"><table>
+    <thead><tr><th></th><th>k3d · PVC</th><th>EKS · EBS</th><th>EKS · EFS</th><th>EKS · agent</th></tr></thead>
+    <tbody>
+      <tr><td>Nodes</td><td>1 · Colima VM, 6 CPU / 8 GiB, arm64</td><td colspan="3">5 · c7i-flex.large, 2 vCPU / 4 GiB each, amd64, 3 AZs</td></tr>
+      <tr><td>Kubernetes</td><td>k3s v1.35.5</td><td colspan="3">EKS v1.37.1</td></tr>
+      <tr><td>Workspace</td><td>local-path PVC, pool of 3</td><td>gp3 EBS PVC, pool of 3</td><td>EFS access point PVC, pool of 3</td><td>emptyDir, agent, S3</td></tr>
+      <tr><td>Ready p50</td><td class="num">3.4 s</td><td class="num">9.7 s</td><td class="num">2.6 s</td><td class="num">0.98 s</td></tr>
+      <tr><td>Usable p50</td><td class="num">3.8 s</td><td class="num">9.9 s</td><td class="num">2.9 s</td><td class="num">1.37 s</td></tr>
+      <tr><td>Peak throughput</td><td class="num">0.34 /s</td><td class="num">0.33 /s</td><td class="num">0.46 /s</td><td class="num">1.00 /s</td></tr>
+      <tr><td>Client</td><td colspan="4">The same laptop, through <code>kubectl port-forward</code></td></tr>
+    </tbody>
+  </table></div>
+  <h3>What the numbers say</h3>
+  <ul>
+    <li><strong>Dropping per-sandbox volumes made sandboxes start 7–10× faster on EKS.</strong> Usable p50 went from 9.9 s with EBS to 1.37 s, and is now well under k3d's 3.8 s. What remains is pod scheduling and container start, plus about 0.4 s for the first exec.</li>
+    <li><strong>EBS spent its time attaching.</strong> From the pod events of 101 EBS sandboxes: about 4 s from scheduling until the volume was attached, then about 4 s to mount it and start the containers; 5 waited about 16 s for a pool volume to detach from another node. The pool could not help, since it can't know which node a sandbox will land on.</li>
+    <li><strong>EFS removed the attach (2.9 s usable)</strong> but shares one filesystem across all sandboxes, with isolation only at the access point and no per-sandbox size limit, and the node mounts are made with the node's identity. That was not good enough, which led to emptyDir plus snapshots.</li>
+    <li><strong>Throughput tripled</strong>, to 1.0 sandbox/s at 4 workers (from 0.33). The namespace quota (about 12 default sandboxes) is now the ceiling: 429 retries appear at 12 workers, and the p90 under load comes from waiting for quota, not from storage.</li>
+    <li><strong>The cost moved to pause and delete.</strong> A pause now uploads the workspace; for small workspaces that takes about 60 ms, and grows with workspace size. Anything written after the last snapshot is lost if the pod dies.</li>
+  </ul>
+<!-- bench:charts:start -->
+<figure>
+    <p class="legend"><span class="l-c1">k3d · PVC</span><span class="l-c2">EKS · EBS</span><span class="l-c3">EKS · agent</span></p>
+    <div class="fig">
+      <svg viewBox="0 0 1000 312" role="img" aria-labelledby="b1t">
+        <title id="b1t">Median time for each phase of creating one sandbox, k3d and EKS, to scale</title>
+        <text class="zl" x="170" y="22">median run · seconds from POST</text>
+        <line class="grid" x1="170.0" y1="34" x2="170.0" y2="232"/><text class="ms" x="170.0" y="248" text-anchor="middle">0 s</text>
+        <line class="grid" x1="291.7" y1="34" x2="291.7" y2="232"/><text class="ms" x="291.7" y="248" text-anchor="middle">2 s</text>
+        <line class="grid" x1="413.3" y1="34" x2="413.3" y2="232"/><text class="ms" x="413.3" y="248" text-anchor="middle">4 s</text>
+        <line class="grid" x1="535.0" y1="34" x2="535.0" y2="232"/><text class="ms" x="535.0" y="248" text-anchor="middle">6 s</text>
+        <line class="grid" x1="656.7" y1="34" x2="656.7" y2="232"/><text class="ms" x="656.7" y="248" text-anchor="middle">8 s</text>
+        <line class="grid" x1="778.3" y1="34" x2="778.3" y2="232"/><text class="ms" x="778.3" y="248" text-anchor="middle">10 s</text>
+        <line class="grid" x1="900.0" y1="34" x2="900.0" y2="232"/><text class="ms" x="900.0" y="248" text-anchor="middle">12 s</text>
+        <text class="t" x="20" y="76">k3d · PVC</text>
+        <g data-tip="k3d · PVC · accepted: 222 ms (ends at 222 ms)"><rect class="hit" x="170.0" y="54" width="12.0" height="36"/><rect class="seg c1 p1" x="170.0" y="60" width="11.5" height="24" rx="3"/></g>
+        <g data-tip="k3d · PVC · waiting for Ready: 3.16 s (ends at 3.38 s)"><rect class="hit" x="183.5" y="54" width="190.3" height="36"/><rect class="seg c1 p2" x="183.5" y="60" width="190.3" height="24" rx="3"/></g>
+        <g data-tip="k3d · PVC · first exec: 416 ms (ends at 3.80 s)"><rect class="hit" x="375.8" y="54" width="23.3" height="36"/><rect class="seg c1 p3" x="375.8" y="60" width="23.3" height="24" rx="3"/></g>
+        <text class="m" x="369.8" y="54" text-anchor="end">Ready 3.4 s</text>
+        <text class="t" x="409.1" y="77">usable 3.8 s</text>
+        <text class="t" x="20" y="140">EKS · EBS</text>
+        <g data-tip="EKS · EBS · accepted: 135 ms (ends at 135 ms)"><rect class="hit" x="170.0" y="118" width="12.0" height="36"/><rect class="seg c2 p1" x="170.0" y="124" width="6.2" height="24" rx="3"/></g>
+        <g data-tip="EKS · EBS · waiting for Ready: 9.59 s (ends at 9.72 s)"><rect class="hit" x="178.2" y="118" width="581.3" height="36"/><rect class="seg c2 p2" x="178.2" y="124" width="581.3" height="24" rx="3"/></g>
+        <g data-tip="EKS · EBS · first exec: 182 ms (ends at 9.91 s)"><rect class="hit" x="761.5" y="118" width="12.0" height="36"/><rect class="seg c2 p3" x="761.5" y="124" width="9.1" height="24" rx="3"/></g>
+        <text class="m" x="755.5" y="118" text-anchor="end">Ready 9.7 s</text>
+        <text class="t" x="780.6" y="141">usable 9.9 s</text>
+        <text class="t" x="20" y="204">EKS · agent</text>
+        <g data-tip="EKS · agent · accepted: 183 ms (ends at 183 ms)"><rect class="hit" x="170.0" y="182" width="12.0" height="36"/><rect class="seg c3 p1" x="170.0" y="188" width="9.1" height="24" rx="3"/></g>
+        <g data-tip="EKS · agent · waiting for Ready: 793 ms (ends at 976 ms)"><rect class="hit" x="181.1" y="182" width="46.3" height="36"/><rect class="seg c3 p2" x="181.1" y="188" width="46.3" height="24" rx="3"/></g>
+        <g data-tip="EKS · agent · first exec: 394 ms (ends at 1.37 s)"><rect class="hit" x="229.4" y="182" width="22.0" height="36"/><rect class="seg c3 p3" x="229.4" y="188" width="22.0" height="24" rx="3"/></g>
+        <text class="m" x="223.4" y="182" text-anchor="end">Ready 976 ms</text>
+        <text class="t" x="261.4" y="205">usable 1.4 s</text>
+        <g class="key" transform="translate(170,280)"><rect class="seg sw p1" width="12" height="12" y="-10" rx="2"/><text class="s" x="18">accepted (POST returned)</text><rect class="seg sw p2" x="170" width="12" height="12" y="-10" rx="2"/><text class="s" x="188">waiting for Ready</text><rect class="seg sw p3" x="310" width="12" height="12" y="-10" rx="2"/><text class="s" x="328">first exec (true)</text></g>
+      </svg>
+    </div>
+    <figcaption><b>Where a create's time goes</b>, median of 20 sandboxes created one at a time in each setup, to scale. The API answers within a fraction of a second in all of them; the rest is the cluster preparing storage and starting the pod, which is where per-sandbox volumes cost the most.</figcaption>
+  </figure>
+<figure>
+    <p class="legend"><span class="l-c1">k3d · PVC</span><span class="l-c2">EKS · EBS</span><span class="l-c3">EKS · agent</span></p>
+    <div class="fig">
+      <svg viewBox="0 0 1000 474" role="img" aria-labelledby="b2t">
+        <title id="b2t">Distribution of each creation phase, k3d and EKS</title>
+        <line class="grid" x1="170.0" y1="30" x2="170.0" y2="424"/><text class="ms" x="170.0" y="442" text-anchor="middle">0 s</text>
+        <line class="grid" x1="265.0" y1="30" x2="265.0" y2="424"/><text class="ms" x="265.0" y="442" text-anchor="middle">2 s</text>
+        <line class="grid" x1="360.0" y1="30" x2="360.0" y2="424"/><text class="ms" x="360.0" y="442" text-anchor="middle">4 s</text>
+        <line class="grid" x1="455.0" y1="30" x2="455.0" y2="424"/><text class="ms" x="455.0" y="442" text-anchor="middle">6 s</text>
+        <line class="grid" x1="550.0" y1="30" x2="550.0" y2="424"/><text class="ms" x="550.0" y="442" text-anchor="middle">8 s</text>
+        <line class="grid" x1="645.0" y1="30" x2="645.0" y2="424"/><text class="ms" x="645.0" y="442" text-anchor="middle">10 s</text>
+        <line class="grid" x1="740.0" y1="30" x2="740.0" y2="424"/><text class="ms" x="740.0" y="442" text-anchor="middle">12 s</text>
+        <text class="zl" x="764" y="22">p50 · p90</text>
+        <text class="t" x="20" y="54">Accepted</text><text class="s" x="20" y="70">POST returned</text>
+        <g data-tip="k3d · PVC · Accepted · run 1: 372 ms"><circle class="hit" cx="187.7" cy="46.8" r="8"/><circle class="dot c1" cx="187.7" cy="46.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 2: 190 ms"><circle class="hit" cx="179.0" cy="50.0" r="8"/><circle class="dot c1" cx="179.0" cy="50.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 3: 196 ms"><circle class="hit" cx="179.3" cy="53.2" r="8"/><circle class="dot c1" cx="179.3" cy="53.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 4: 192 ms"><circle class="hit" cx="179.1" cy="48.4" r="8"/><circle class="dot c1" cx="179.1" cy="48.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 5: 201 ms"><circle class="hit" cx="179.5" cy="51.6" r="8"/><circle class="dot c1" cx="179.5" cy="51.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 6: 222 ms"><circle class="hit" cx="180.5" cy="46.8" r="8"/><circle class="dot c1" cx="180.5" cy="46.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 7: 272 ms"><circle class="hit" cx="182.9" cy="50.0" r="8"/><circle class="dot c1" cx="182.9" cy="50.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 8: 274 ms"><circle class="hit" cx="183.0" cy="53.2" r="8"/><circle class="dot c1" cx="183.0" cy="53.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 9: 318 ms"><circle class="hit" cx="185.1" cy="48.4" r="8"/><circle class="dot c1" cx="185.1" cy="48.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 10: 195 ms"><circle class="hit" cx="179.3" cy="51.6" r="8"/><circle class="dot c1" cx="179.3" cy="51.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 11: 364 ms"><circle class="hit" cx="187.3" cy="46.8" r="8"/><circle class="dot c1" cx="187.3" cy="46.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 12: 410 ms"><circle class="hit" cx="189.5" cy="50.0" r="8"/><circle class="dot c1" cx="189.5" cy="50.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 13: 216 ms"><circle class="hit" cx="180.2" cy="53.2" r="8"/><circle class="dot c1" cx="180.2" cy="53.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 14: 240 ms"><circle class="hit" cx="181.4" cy="48.4" r="8"/><circle class="dot c1" cx="181.4" cy="48.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 15: 196 ms"><circle class="hit" cx="179.3" cy="51.6" r="8"/><circle class="dot c1" cx="179.3" cy="51.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 16: 302 ms"><circle class="hit" cx="184.4" cy="46.8" r="8"/><circle class="dot c1" cx="184.4" cy="46.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 17: 340 ms"><circle class="hit" cx="186.2" cy="50.0" r="8"/><circle class="dot c1" cx="186.2" cy="50.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 18: 378 ms"><circle class="hit" cx="188.0" cy="53.2" r="8"/><circle class="dot c1" cx="188.0" cy="53.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 19: 205 ms"><circle class="hit" cx="179.7" cy="48.4" r="8"/><circle class="dot c1" cx="179.7" cy="48.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Accepted · run 20: 196 ms"><circle class="hit" cx="179.3" cy="51.6" r="8"/><circle class="dot c1" cx="179.3" cy="51.6" r="4"/></g>
+        <line class="p50" x1="180.5" y1="41" x2="180.5" y2="59"/>
+        <text class="s" x="764" y="54">k3d · PVC</text><text class="m" x="844" y="54">222 ms · 372 ms</text>
+        <g data-tip="EKS · EBS · Accepted · run 1: 135 ms"><circle class="hit" cx="176.4" cy="68.8" r="8"/><circle class="dot c2" cx="176.4" cy="68.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 2: 191 ms"><circle class="hit" cx="179.0" cy="72.0" r="8"/><circle class="dot c2" cx="179.0" cy="72.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 3: 129 ms"><circle class="hit" cx="176.1" cy="75.2" r="8"/><circle class="dot c2" cx="176.1" cy="75.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 4: 174 ms"><circle class="hit" cx="178.3" cy="70.4" r="8"/><circle class="dot c2" cx="178.3" cy="70.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 5: 141 ms"><circle class="hit" cx="176.7" cy="73.6" r="8"/><circle class="dot c2" cx="176.7" cy="73.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 6: 118 ms"><circle class="hit" cx="175.6" cy="68.8" r="8"/><circle class="dot c2" cx="175.6" cy="68.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 7: 141 ms"><circle class="hit" cx="176.7" cy="72.0" r="8"/><circle class="dot c2" cx="176.7" cy="72.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 8: 141 ms"><circle class="hit" cx="176.7" cy="75.2" r="8"/><circle class="dot c2" cx="176.7" cy="75.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 9: 122 ms"><circle class="hit" cx="175.8" cy="70.4" r="8"/><circle class="dot c2" cx="175.8" cy="70.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 10: 139 ms"><circle class="hit" cx="176.6" cy="73.6" r="8"/><circle class="dot c2" cx="176.6" cy="73.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 11: 132 ms"><circle class="hit" cx="176.3" cy="68.8" r="8"/><circle class="dot c2" cx="176.3" cy="68.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 12: 133 ms"><circle class="hit" cx="176.3" cy="72.0" r="8"/><circle class="dot c2" cx="176.3" cy="72.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 13: 124 ms"><circle class="hit" cx="175.9" cy="75.2" r="8"/><circle class="dot c2" cx="175.9" cy="75.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 14: 142 ms"><circle class="hit" cx="176.8" cy="70.4" r="8"/><circle class="dot c2" cx="176.8" cy="70.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 15: 137 ms"><circle class="hit" cx="176.5" cy="73.6" r="8"/><circle class="dot c2" cx="176.5" cy="73.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 16: 119 ms"><circle class="hit" cx="175.7" cy="68.8" r="8"/><circle class="dot c2" cx="175.7" cy="68.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 17: 150 ms"><circle class="hit" cx="177.1" cy="72.0" r="8"/><circle class="dot c2" cx="177.1" cy="72.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 18: 134 ms"><circle class="hit" cx="176.4" cy="75.2" r="8"/><circle class="dot c2" cx="176.4" cy="75.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 19: 137 ms"><circle class="hit" cx="176.5" cy="70.4" r="8"/><circle class="dot c2" cx="176.5" cy="70.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Accepted · run 20: 114 ms"><circle class="hit" cx="175.4" cy="73.6" r="8"/><circle class="dot c2" cx="175.4" cy="73.6" r="4"/></g>
+        <line class="p50" x1="176.4" y1="63" x2="176.4" y2="81"/>
+        <text class="s" x="764" y="76">EKS · EBS</text><text class="m" x="844" y="76">135 ms · 150 ms</text>
+        <g data-tip="EKS · agent · Accepted · run 1: 132 ms"><circle class="hit" cx="176.3" cy="90.8" r="8"/><circle class="dot c3" cx="176.3" cy="90.8" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 2: 86 ms"><circle class="hit" cx="174.1" cy="94.0" r="8"/><circle class="dot c3" cx="174.1" cy="94.0" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 3: 89 ms"><circle class="hit" cx="174.2" cy="97.2" r="8"/><circle class="dot c3" cx="174.2" cy="97.2" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 4: 191 ms"><circle class="hit" cx="179.1" cy="92.4" r="8"/><circle class="dot c3" cx="179.1" cy="92.4" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 5: 199 ms"><circle class="hit" cx="179.5" cy="95.6" r="8"/><circle class="dot c3" cx="179.5" cy="95.6" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 6: 188 ms"><circle class="hit" cx="178.9" cy="90.8" r="8"/><circle class="dot c3" cx="178.9" cy="90.8" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 7: 186 ms"><circle class="hit" cx="178.8" cy="94.0" r="8"/><circle class="dot c3" cx="178.8" cy="94.0" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 8: 187 ms"><circle class="hit" cx="178.9" cy="97.2" r="8"/><circle class="dot c3" cx="178.9" cy="97.2" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 9: 262 ms"><circle class="hit" cx="182.5" cy="92.4" r="8"/><circle class="dot c3" cx="182.5" cy="92.4" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 10: 232 ms"><circle class="hit" cx="181.0" cy="95.6" r="8"/><circle class="dot c3" cx="181.0" cy="95.6" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 11: 169 ms"><circle class="hit" cx="178.0" cy="90.8" r="8"/><circle class="dot c3" cx="178.0" cy="90.8" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 12: 154 ms"><circle class="hit" cx="177.3" cy="94.0" r="8"/><circle class="dot c3" cx="177.3" cy="94.0" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 13: 183 ms"><circle class="hit" cx="178.7" cy="97.2" r="8"/><circle class="dot c3" cx="178.7" cy="97.2" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 14: 149 ms"><circle class="hit" cx="177.1" cy="92.4" r="8"/><circle class="dot c3" cx="177.1" cy="92.4" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 15: 189 ms"><circle class="hit" cx="179.0" cy="95.6" r="8"/><circle class="dot c3" cx="179.0" cy="95.6" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 16: 175 ms"><circle class="hit" cx="178.3" cy="90.8" r="8"/><circle class="dot c3" cx="178.3" cy="90.8" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 17: 187 ms"><circle class="hit" cx="178.9" cy="94.0" r="8"/><circle class="dot c3" cx="178.9" cy="94.0" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 18: 188 ms"><circle class="hit" cx="178.9" cy="97.2" r="8"/><circle class="dot c3" cx="178.9" cy="97.2" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 19: 172 ms"><circle class="hit" cx="178.2" cy="92.4" r="8"/><circle class="dot c3" cx="178.2" cy="92.4" r="4"/></g>
+        <g data-tip="EKS · agent · Accepted · run 20: 97 ms"><circle class="hit" cx="174.6" cy="95.6" r="8"/><circle class="dot c3" cx="174.6" cy="95.6" r="4"/></g>
+        <line class="p50" x1="178.7" y1="85" x2="178.7" y2="103"/>
+        <text class="s" x="764" y="98">EKS · agent</text><text class="m" x="844" y="98">183 ms · 199 ms</text>
+        <line class="row" x1="20" y1="128" x2="980" y2="128"/>
+        <text class="t" x="20" y="150">Ready</text><text class="s" x="20" y="166">first poll saw Ready</text>
+        <g data-tip="k3d · PVC · Ready · run 1: 3.35 s"><circle class="hit" cx="329.0" cy="142.8" r="8"/><circle class="dot c1" cx="329.0" cy="142.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 2: 3.37 s"><circle class="hit" cx="330.1" cy="146.0" r="8"/><circle class="dot c1" cx="330.1" cy="146.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 3: 3.37 s"><circle class="hit" cx="330.1" cy="149.2" r="8"/><circle class="dot c1" cx="330.1" cy="149.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 4: 3.57 s"><circle class="hit" cx="339.7" cy="144.4" r="8"/><circle class="dot c1" cx="339.7" cy="144.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 5: 3.38 s"><circle class="hit" cx="330.7" cy="147.6" r="8"/><circle class="dot c1" cx="330.7" cy="147.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 6: 3.39 s"><circle class="hit" cx="331.0" cy="142.8" r="8"/><circle class="dot c1" cx="331.0" cy="142.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 7: 3.39 s"><circle class="hit" cx="330.9" cy="146.0" r="8"/><circle class="dot c1" cx="330.9" cy="146.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 8: 3.38 s"><circle class="hit" cx="330.8" cy="149.2" r="8"/><circle class="dot c1" cx="330.8" cy="149.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 9: 3.39 s"><circle class="hit" cx="331.2" cy="144.4" r="8"/><circle class="dot c1" cx="331.2" cy="144.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 10: 3.36 s"><circle class="hit" cx="329.5" cy="147.6" r="8"/><circle class="dot c1" cx="329.5" cy="147.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 11: 3.37 s"><circle class="hit" cx="330.2" cy="142.8" r="8"/><circle class="dot c1" cx="330.2" cy="142.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 12: 3.58 s"><circle class="hit" cx="340.1" cy="146.0" r="8"/><circle class="dot c1" cx="340.1" cy="146.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 13: 3.39 s"><circle class="hit" cx="330.8" cy="149.2" r="8"/><circle class="dot c1" cx="330.8" cy="149.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 14: 3.38 s"><circle class="hit" cx="330.7" cy="144.4" r="8"/><circle class="dot c1" cx="330.7" cy="144.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 15: 3.36 s"><circle class="hit" cx="329.6" cy="147.6" r="8"/><circle class="dot c1" cx="329.6" cy="147.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 16: 3.36 s"><circle class="hit" cx="329.7" cy="142.8" r="8"/><circle class="dot c1" cx="329.7" cy="142.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 17: 3.37 s"><circle class="hit" cx="330.0" cy="146.0" r="8"/><circle class="dot c1" cx="330.0" cy="146.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 18: 3.58 s"><circle class="hit" cx="340.2" cy="149.2" r="8"/><circle class="dot c1" cx="340.2" cy="149.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 19: 3.39 s"><circle class="hit" cx="330.9" cy="144.4" r="8"/><circle class="dot c1" cx="330.9" cy="144.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Ready · run 20: 3.36 s"><circle class="hit" cx="329.5" cy="147.6" r="8"/><circle class="dot c1" cx="329.5" cy="147.6" r="4"/></g>
+        <line class="p50" x1="330.7" y1="137" x2="330.7" y2="155"/>
+        <text class="s" x="764" y="150">k3d · PVC</text><text class="m" x="844" y="150">3.4 s · 3.6 s</text>
+        <g data-tip="EKS · EBS · Ready · run 1: 9.62 s"><circle class="hit" cx="626.8" cy="164.8" r="8"/><circle class="dot c2" cx="626.8" cy="164.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 2: 9.82 s"><circle class="hit" cx="636.2" cy="168.0" r="8"/><circle class="dot c2" cx="636.2" cy="168.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 3: 10.76 s"><circle class="hit" cx="681.3" cy="171.2" r="8"/><circle class="dot c2" cx="681.3" cy="171.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 4: 9.63 s"><circle class="hit" cx="627.4" cy="166.4" r="8"/><circle class="dot c2" cx="627.4" cy="166.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 5: 9.72 s"><circle class="hit" cx="631.9" cy="169.6" r="8"/><circle class="dot c2" cx="631.9" cy="169.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 6: 10.77 s"><circle class="hit" cx="681.7" cy="164.8" r="8"/><circle class="dot c2" cx="681.7" cy="164.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 7: 9.72 s"><circle class="hit" cx="631.7" cy="168.0" r="8"/><circle class="dot c2" cx="631.7" cy="168.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 8: 9.75 s"><circle class="hit" cx="633.0" cy="171.2" r="8"/><circle class="dot c2" cx="633.0" cy="171.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 9: 9.76 s"><circle class="hit" cx="633.6" cy="166.4" r="8"/><circle class="dot c2" cx="633.6" cy="166.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 10: 9.59 s"><circle class="hit" cx="625.3" cy="169.6" r="8"/><circle class="dot c2" cx="625.3" cy="169.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 11: 9.63 s"><circle class="hit" cx="627.5" cy="164.8" r="8"/><circle class="dot c2" cx="627.5" cy="164.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 12: 10.95 s"><circle class="hit" cx="690.2" cy="168.0" r="8"/><circle class="dot c2" cx="690.2" cy="168.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 13: 9.66 s"><circle class="hit" cx="628.9" cy="171.2" r="8"/><circle class="dot c2" cx="628.9" cy="171.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 14: 9.69 s"><circle class="hit" cx="630.3" cy="166.4" r="8"/><circle class="dot c2" cx="630.3" cy="166.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 15: 9.82 s"><circle class="hit" cx="636.5" cy="169.6" r="8"/><circle class="dot c2" cx="636.5" cy="169.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 16: 10.84 s"><circle class="hit" cx="684.7" cy="164.8" r="8"/><circle class="dot c2" cx="684.7" cy="164.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 17: 9.72 s"><circle class="hit" cx="631.9" cy="168.0" r="8"/><circle class="dot c2" cx="631.9" cy="168.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 18: 9.74 s"><circle class="hit" cx="632.5" cy="171.2" r="8"/><circle class="dot c2" cx="632.5" cy="171.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 19: 9.65 s"><circle class="hit" cx="628.3" cy="166.4" r="8"/><circle class="dot c2" cx="628.3" cy="166.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Ready · run 20: 9.77 s"><circle class="hit" cx="633.9" cy="169.6" r="8"/><circle class="dot c2" cx="633.9" cy="169.6" r="4"/></g>
+        <line class="p50" x1="631.9" y1="159" x2="631.9" y2="177"/>
+        <text class="s" x="764" y="172">EKS · EBS</text><text class="m" x="844" y="172">9.7 s · 10.8 s</text>
+        <g data-tip="EKS · agent · Ready · run 1: 701 ms"><circle class="hit" cx="203.3" cy="186.8" r="8"/><circle class="dot c3" cx="203.3" cy="186.8" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 2: 850 ms"><circle class="hit" cx="210.4" cy="190.0" r="8"/><circle class="dot c3" cx="210.4" cy="190.0" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 3: 749 ms"><circle class="hit" cx="205.6" cy="193.2" r="8"/><circle class="dot c3" cx="205.6" cy="193.2" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 4: 976 ms"><circle class="hit" cx="216.4" cy="188.4" r="8"/><circle class="dot c3" cx="216.4" cy="188.4" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 5: 981 ms"><circle class="hit" cx="216.6" cy="191.6" r="8"/><circle class="dot c3" cx="216.6" cy="191.6" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 6: 879 ms"><circle class="hit" cx="211.7" cy="186.8" r="8"/><circle class="dot c3" cx="211.7" cy="186.8" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 7: 1.01 s"><circle class="hit" cx="218.1" cy="190.0" r="8"/><circle class="dot c3" cx="218.1" cy="190.0" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 8: 985 ms"><circle class="hit" cx="216.8" cy="193.2" r="8"/><circle class="dot c3" cx="216.8" cy="193.2" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 9: 1.06 s"><circle class="hit" cx="220.4" cy="188.4" r="8"/><circle class="dot c3" cx="220.4" cy="188.4" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 10: 1.11 s"><circle class="hit" cx="222.8" cy="191.6" r="8"/><circle class="dot c3" cx="222.8" cy="191.6" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 11: 870 ms"><circle class="hit" cx="211.3" cy="186.8" r="8"/><circle class="dot c3" cx="211.3" cy="186.8" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 12: 1.05 s"><circle class="hit" cx="219.8" cy="190.0" r="8"/><circle class="dot c3" cx="219.8" cy="190.0" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 13: 848 ms"><circle class="hit" cx="210.3" cy="193.2" r="8"/><circle class="dot c3" cx="210.3" cy="193.2" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 14: 925 ms"><circle class="hit" cx="214.0" cy="188.4" r="8"/><circle class="dot c3" cx="214.0" cy="188.4" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 15: 980 ms"><circle class="hit" cx="216.5" cy="191.6" r="8"/><circle class="dot c3" cx="216.5" cy="191.6" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 16: 840 ms"><circle class="hit" cx="209.9" cy="186.8" r="8"/><circle class="dot c3" cx="209.9" cy="186.8" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 17: 980 ms"><circle class="hit" cx="216.5" cy="190.0" r="8"/><circle class="dot c3" cx="216.5" cy="190.0" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 18: 1.02 s"><circle class="hit" cx="218.3" cy="193.2" r="8"/><circle class="dot c3" cx="218.3" cy="193.2" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 19: 983 ms"><circle class="hit" cx="216.7" cy="188.4" r="8"/><circle class="dot c3" cx="216.7" cy="188.4" r="4"/></g>
+        <g data-tip="EKS · agent · Ready · run 20: 891 ms"><circle class="hit" cx="212.3" cy="191.6" r="8"/><circle class="dot c3" cx="212.3" cy="191.6" r="4"/></g>
+        <line class="p50" x1="216.4" y1="181" x2="216.4" y2="199"/>
+        <text class="s" x="764" y="194">EKS · agent</text><text class="m" x="844" y="194">976 ms · 1.0 s</text>
+        <line class="row" x1="20" y1="224" x2="980" y2="224"/>
+        <text class="t" x="20" y="246">Usable</text><text class="s" x="20" y="262">first exec finished</text>
+        <g data-tip="k3d · PVC · Usable · run 1: 3.76 s"><circle class="hit" cx="348.7" cy="238.8" r="8"/><circle class="dot c1" cx="348.7" cy="238.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 2: 3.80 s"><circle class="hit" cx="350.3" cy="242.0" r="8"/><circle class="dot c1" cx="350.3" cy="242.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 3: 3.79 s"><circle class="hit" cx="349.9" cy="245.2" r="8"/><circle class="dot c1" cx="349.9" cy="245.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 4: 4.04 s"><circle class="hit" cx="361.7" cy="240.4" r="8"/><circle class="dot c1" cx="361.7" cy="240.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 5: 3.80 s"><circle class="hit" cx="350.5" cy="243.6" r="8"/><circle class="dot c1" cx="350.5" cy="243.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 6: 3.80 s"><circle class="hit" cx="350.6" cy="238.8" r="8"/><circle class="dot c1" cx="350.6" cy="238.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 7: 3.80 s"><circle class="hit" cx="350.5" cy="242.0" r="8"/><circle class="dot c1" cx="350.5" cy="242.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 8: 3.81 s"><circle class="hit" cx="350.8" cy="245.2" r="8"/><circle class="dot c1" cx="350.8" cy="245.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 9: 3.85 s"><circle class="hit" cx="352.7" cy="240.4" r="8"/><circle class="dot c1" cx="352.7" cy="240.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 10: 3.77 s"><circle class="hit" cx="349.0" cy="243.6" r="8"/><circle class="dot c1" cx="349.0" cy="243.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 11: 3.79 s"><circle class="hit" cx="349.8" cy="238.8" r="8"/><circle class="dot c1" cx="349.8" cy="238.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 12: 3.99 s"><circle class="hit" cx="359.7" cy="242.0" r="8"/><circle class="dot c1" cx="359.7" cy="242.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 13: 3.80 s"><circle class="hit" cx="350.5" cy="245.2" r="8"/><circle class="dot c1" cx="350.5" cy="245.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 14: 3.81 s"><circle class="hit" cx="351.0" cy="240.4" r="8"/><circle class="dot c1" cx="351.0" cy="240.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 15: 3.81 s"><circle class="hit" cx="350.8" cy="243.6" r="8"/><circle class="dot c1" cx="350.8" cy="243.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 16: 3.77 s"><circle class="hit" cx="349.3" cy="238.8" r="8"/><circle class="dot c1" cx="349.3" cy="238.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 17: 3.78 s"><circle class="hit" cx="349.6" cy="242.0" r="8"/><circle class="dot c1" cx="349.6" cy="242.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 18: 4.02 s"><circle class="hit" cx="360.9" cy="245.2" r="8"/><circle class="dot c1" cx="360.9" cy="245.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 19: 3.80 s"><circle class="hit" cx="350.4" cy="240.4" r="8"/><circle class="dot c1" cx="350.4" cy="240.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Usable · run 20: 3.77 s"><circle class="hit" cx="349.1" cy="243.6" r="8"/><circle class="dot c1" cx="349.1" cy="243.6" r="4"/></g>
+        <line class="p50" x1="350.5" y1="233" x2="350.5" y2="251"/>
+        <text class="s" x="764" y="246">k3d · PVC</text><text class="m" x="844" y="246">3.8 s · 4.0 s</text>
+        <g data-tip="EKS · EBS · Usable · run 1: 9.80 s"><circle class="hit" cx="635.7" cy="260.8" r="8"/><circle class="dot c2" cx="635.7" cy="260.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 2: 9.97 s"><circle class="hit" cx="643.4" cy="264.0" r="8"/><circle class="dot c2" cx="643.4" cy="264.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 3: 10.94 s"><circle class="hit" cx="689.5" cy="267.2" r="8"/><circle class="dot c2" cx="689.5" cy="267.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 4: 9.95 s"><circle class="hit" cx="642.6" cy="262.4" r="8"/><circle class="dot c2" cx="642.6" cy="262.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 5: 9.89 s"><circle class="hit" cx="639.6" cy="265.6" r="8"/><circle class="dot c2" cx="639.6" cy="265.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 6: 10.95 s"><circle class="hit" cx="690.3" cy="260.8" r="8"/><circle class="dot c2" cx="690.3" cy="260.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 7: 9.90 s"><circle class="hit" cx="640.0" cy="264.0" r="8"/><circle class="dot c2" cx="640.0" cy="264.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 8: 9.91 s"><circle class="hit" cx="640.5" cy="267.2" r="8"/><circle class="dot c2" cx="640.5" cy="267.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 9: 9.92 s"><circle class="hit" cx="641.1" cy="262.4" r="8"/><circle class="dot c2" cx="641.1" cy="262.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 10: 9.80 s"><circle class="hit" cx="635.7" cy="265.6" r="8"/><circle class="dot c2" cx="635.7" cy="265.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 11: 9.79 s"><circle class="hit" cx="634.9" cy="260.8" r="8"/><circle class="dot c2" cx="634.9" cy="260.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 12: 11.11 s"><circle class="hit" cx="697.8" cy="264.0" r="8"/><circle class="dot c2" cx="697.8" cy="264.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 13: 9.83 s"><circle class="hit" cx="636.8" cy="267.2" r="8"/><circle class="dot c2" cx="636.8" cy="267.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 14: 9.84 s"><circle class="hit" cx="637.5" cy="262.4" r="8"/><circle class="dot c2" cx="637.5" cy="262.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 15: 9.99 s"><circle class="hit" cx="644.5" cy="265.6" r="8"/><circle class="dot c2" cx="644.5" cy="265.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 16: 10.99 s"><circle class="hit" cx="692.2" cy="260.8" r="8"/><circle class="dot c2" cx="692.2" cy="260.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 17: 9.88 s"><circle class="hit" cx="639.5" cy="264.0" r="8"/><circle class="dot c2" cx="639.5" cy="264.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 18: 9.91 s"><circle class="hit" cx="640.7" cy="267.2" r="8"/><circle class="dot c2" cx="640.7" cy="267.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 19: 9.80 s"><circle class="hit" cx="635.5" cy="262.4" r="8"/><circle class="dot c2" cx="635.5" cy="262.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Usable · run 20: 9.94 s"><circle class="hit" cx="642.4" cy="265.6" r="8"/><circle class="dot c2" cx="642.4" cy="265.6" r="4"/></g>
+        <line class="p50" x1="640.5" y1="255" x2="640.5" y2="273"/>
+        <text class="s" x="764" y="268">EKS · EBS</text><text class="m" x="844" y="268">9.9 s · 11.0 s</text>
+        <g data-tip="EKS · agent · Usable · run 1: 921 ms"><circle class="hit" cx="213.7" cy="282.8" r="8"/><circle class="dot c3" cx="213.7" cy="282.8" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 2: 989 ms"><circle class="hit" cx="217.0" cy="286.0" r="8"/><circle class="dot c3" cx="217.0" cy="286.0" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 3: 1.07 s"><circle class="hit" cx="220.8" cy="289.2" r="8"/><circle class="dot c3" cx="220.8" cy="289.2" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 4: 1.46 s"><circle class="hit" cx="239.4" cy="284.4" r="8"/><circle class="dot c3" cx="239.4" cy="284.4" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 5: 1.42 s"><circle class="hit" cx="237.6" cy="287.6" r="8"/><circle class="dot c3" cx="237.6" cy="287.6" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 6: 1.25 s"><circle class="hit" cx="229.1" cy="282.8" r="8"/><circle class="dot c3" cx="229.1" cy="282.8" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 7: 1.43 s"><circle class="hit" cx="238.0" cy="286.0" r="8"/><circle class="dot c3" cx="238.0" cy="286.0" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 8: 1.42 s"><circle class="hit" cx="237.6" cy="289.2" r="8"/><circle class="dot c3" cx="237.6" cy="289.2" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 9: 1.48 s"><circle class="hit" cx="240.3" cy="284.4" r="8"/><circle class="dot c3" cx="240.3" cy="284.4" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 10: 1.46 s"><circle class="hit" cx="239.2" cy="287.6" r="8"/><circle class="dot c3" cx="239.2" cy="287.6" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 11: 1.22 s"><circle class="hit" cx="227.7" cy="282.8" r="8"/><circle class="dot c3" cx="227.7" cy="282.8" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 12: 1.20 s"><circle class="hit" cx="227.0" cy="286.0" r="8"/><circle class="dot c3" cx="227.0" cy="286.0" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 13: 1.21 s"><circle class="hit" cx="227.6" cy="289.2" r="8"/><circle class="dot c3" cx="227.6" cy="289.2" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 14: 1.37 s"><circle class="hit" cx="235.1" cy="284.4" r="8"/><circle class="dot c3" cx="235.1" cy="284.4" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 15: 1.43 s"><circle class="hit" cx="237.8" cy="287.6" r="8"/><circle class="dot c3" cx="237.8" cy="287.6" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 16: 1.24 s"><circle class="hit" cx="229.1" cy="282.8" r="8"/><circle class="dot c3" cx="229.1" cy="282.8" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 17: 1.43 s"><circle class="hit" cx="238.0" cy="286.0" r="8"/><circle class="dot c3" cx="238.0" cy="286.0" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 18: 1.47 s"><circle class="hit" cx="239.8" cy="289.2" r="8"/><circle class="dot c3" cx="239.8" cy="289.2" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 19: 1.42 s"><circle class="hit" cx="237.3" cy="284.4" r="8"/><circle class="dot c3" cx="237.3" cy="284.4" r="4"/></g>
+        <g data-tip="EKS · agent · Usable · run 20: 1.34 s"><circle class="hit" cx="233.5" cy="287.6" r="8"/><circle class="dot c3" cx="233.5" cy="287.6" r="4"/></g>
+        <line class="p50" x1="235.1" y1="277" x2="235.1" y2="295"/>
+        <text class="s" x="764" y="290">EKS · agent</text><text class="m" x="844" y="290">1.4 s · 1.5 s</text>
+        <line class="row" x1="20" y1="320" x2="980" y2="320"/>
+        <text class="t" x="20" y="342">Delete</text><text class="s" x="20" y="358">DELETE ?purge=true</text>
+        <g data-tip="k3d · PVC · Delete · run 1: 196 ms"><circle class="hit" cx="179.3" cy="334.8" r="8"/><circle class="dot c1" cx="179.3" cy="334.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 2: 172 ms"><circle class="hit" cx="178.2" cy="338.0" r="8"/><circle class="dot c1" cx="178.2" cy="338.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 3: 188 ms"><circle class="hit" cx="178.9" cy="341.2" r="8"/><circle class="dot c1" cx="178.9" cy="341.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 4: 144 ms"><circle class="hit" cx="176.9" cy="336.4" r="8"/><circle class="dot c1" cx="176.9" cy="336.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 5: 186 ms"><circle class="hit" cx="178.8" cy="339.6" r="8"/><circle class="dot c1" cx="178.8" cy="339.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 6: 194 ms"><circle class="hit" cx="179.2" cy="334.8" r="8"/><circle class="dot c1" cx="179.2" cy="334.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 7: 199 ms"><circle class="hit" cx="179.4" cy="338.0" r="8"/><circle class="dot c1" cx="179.4" cy="338.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 8: 181 ms"><circle class="hit" cx="178.6" cy="341.2" r="8"/><circle class="dot c1" cx="178.6" cy="341.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 9: 148 ms"><circle class="hit" cx="177.0" cy="336.4" r="8"/><circle class="dot c1" cx="177.0" cy="336.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 10: 189 ms"><circle class="hit" cx="179.0" cy="339.6" r="8"/><circle class="dot c1" cx="179.0" cy="339.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 11: 186 ms"><circle class="hit" cx="178.8" cy="334.8" r="8"/><circle class="dot c1" cx="178.8" cy="334.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 12: 190 ms"><circle class="hit" cx="179.0" cy="338.0" r="8"/><circle class="dot c1" cx="179.0" cy="338.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 13: 194 ms"><circle class="hit" cx="179.2" cy="341.2" r="8"/><circle class="dot c1" cx="179.2" cy="341.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 14: 173 ms"><circle class="hit" cx="178.2" cy="336.4" r="8"/><circle class="dot c1" cx="178.2" cy="336.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 15: 162 ms"><circle class="hit" cx="177.7" cy="339.6" r="8"/><circle class="dot c1" cx="177.7" cy="339.6" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 16: 201 ms"><circle class="hit" cx="179.5" cy="334.8" r="8"/><circle class="dot c1" cx="179.5" cy="334.8" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 17: 193 ms"><circle class="hit" cx="179.2" cy="338.0" r="8"/><circle class="dot c1" cx="179.2" cy="338.0" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 18: 172 ms"><circle class="hit" cx="178.2" cy="341.2" r="8"/><circle class="dot c1" cx="178.2" cy="341.2" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 19: 187 ms"><circle class="hit" cx="178.9" cy="336.4" r="8"/><circle class="dot c1" cx="178.9" cy="336.4" r="4"/></g>
+        <g data-tip="k3d · PVC · Delete · run 20: 197 ms"><circle class="hit" cx="179.4" cy="339.6" r="8"/><circle class="dot c1" cx="179.4" cy="339.6" r="4"/></g>
+        <line class="p50" x1="178.9" y1="329" x2="178.9" y2="347"/>
+        <text class="s" x="764" y="342">k3d · PVC</text><text class="m" x="844" y="342">187 ms · 197 ms</text>
+        <g data-tip="EKS · EBS · Delete · run 1: 117 ms"><circle class="hit" cx="175.6" cy="356.8" r="8"/><circle class="dot c2" cx="175.6" cy="356.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 2: 126 ms"><circle class="hit" cx="176.0" cy="360.0" r="8"/><circle class="dot c2" cx="176.0" cy="360.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 3: 121 ms"><circle class="hit" cx="175.8" cy="363.2" r="8"/><circle class="dot c2" cx="175.8" cy="363.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 4: 125 ms"><circle class="hit" cx="175.9" cy="358.4" r="8"/><circle class="dot c2" cx="175.9" cy="358.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 5: 134 ms"><circle class="hit" cx="176.4" cy="361.6" r="8"/><circle class="dot c2" cx="176.4" cy="361.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 6: 120 ms"><circle class="hit" cx="175.7" cy="356.8" r="8"/><circle class="dot c2" cx="175.7" cy="356.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 7: 114 ms"><circle class="hit" cx="175.4" cy="360.0" r="8"/><circle class="dot c2" cx="175.4" cy="360.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 8: 126 ms"><circle class="hit" cx="176.0" cy="363.2" r="8"/><circle class="dot c2" cx="176.0" cy="363.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 9: 121 ms"><circle class="hit" cx="175.8" cy="358.4" r="8"/><circle class="dot c2" cx="175.8" cy="358.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 10: 142 ms"><circle class="hit" cx="176.7" cy="361.6" r="8"/><circle class="dot c2" cx="176.7" cy="361.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 11: 114 ms"><circle class="hit" cx="175.4" cy="356.8" r="8"/><circle class="dot c2" cx="175.4" cy="356.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 12: 111 ms"><circle class="hit" cx="175.3" cy="360.0" r="8"/><circle class="dot c2" cx="175.3" cy="360.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 13: 107 ms"><circle class="hit" cx="175.1" cy="363.2" r="8"/><circle class="dot c2" cx="175.1" cy="363.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 14: 105 ms"><circle class="hit" cx="175.0" cy="358.4" r="8"/><circle class="dot c2" cx="175.0" cy="358.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 15: 117 ms"><circle class="hit" cx="175.6" cy="361.6" r="8"/><circle class="dot c2" cx="175.6" cy="361.6" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 16: 119 ms"><circle class="hit" cx="175.6" cy="356.8" r="8"/><circle class="dot c2" cx="175.6" cy="356.8" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 17: 133 ms"><circle class="hit" cx="176.3" cy="360.0" r="8"/><circle class="dot c2" cx="176.3" cy="360.0" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 18: 112 ms"><circle class="hit" cx="175.3" cy="363.2" r="8"/><circle class="dot c2" cx="175.3" cy="363.2" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 19: 105 ms"><circle class="hit" cx="175.0" cy="358.4" r="8"/><circle class="dot c2" cx="175.0" cy="358.4" r="4"/></g>
+        <g data-tip="EKS · EBS · Delete · run 20: 114 ms"><circle class="hit" cx="175.4" cy="361.6" r="8"/><circle class="dot c2" cx="175.4" cy="361.6" r="4"/></g>
+        <line class="p50" x1="175.6" y1="351" x2="175.6" y2="369"/>
+        <text class="s" x="764" y="364">EKS · EBS</text><text class="m" x="844" y="364">117 ms · 133 ms</text>
+        <g data-tip="EKS · agent · Delete · run 1: 95 ms"><circle class="hit" cx="174.5" cy="378.8" r="8"/><circle class="dot c3" cx="174.5" cy="378.8" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 2: 91 ms"><circle class="hit" cx="174.3" cy="382.0" r="8"/><circle class="dot c3" cx="174.3" cy="382.0" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 3: 185 ms"><circle class="hit" cx="178.8" cy="385.2" r="8"/><circle class="dot c3" cx="178.8" cy="385.2" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 4: 135 ms"><circle class="hit" cx="176.4" cy="380.4" r="8"/><circle class="dot c3" cx="176.4" cy="380.4" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 5: 174 ms"><circle class="hit" cx="178.3" cy="383.6" r="8"/><circle class="dot c3" cx="178.3" cy="383.6" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 6: 157 ms"><circle class="hit" cx="177.5" cy="378.8" r="8"/><circle class="dot c3" cx="177.5" cy="378.8" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 7: 170 ms"><circle class="hit" cx="178.1" cy="382.0" r="8"/><circle class="dot c3" cx="178.1" cy="382.0" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 8: 176 ms"><circle class="hit" cx="178.3" cy="385.2" r="8"/><circle class="dot c3" cx="178.3" cy="385.2" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 9: 123 ms"><circle class="hit" cx="175.8" cy="380.4" r="8"/><circle class="dot c3" cx="175.8" cy="380.4" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 10: 178 ms"><circle class="hit" cx="178.4" cy="383.6" r="8"/><circle class="dot c3" cx="178.4" cy="383.6" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 11: 179 ms"><circle class="hit" cx="178.5" cy="378.8" r="8"/><circle class="dot c3" cx="178.5" cy="378.8" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 12: 196 ms"><circle class="hit" cx="179.3" cy="382.0" r="8"/><circle class="dot c3" cx="179.3" cy="382.0" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 13: 218 ms"><circle class="hit" cx="180.4" cy="385.2" r="8"/><circle class="dot c3" cx="180.4" cy="385.2" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 14: 171 ms"><circle class="hit" cx="178.1" cy="380.4" r="8"/><circle class="dot c3" cx="178.1" cy="380.4" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 15: 183 ms"><circle class="hit" cx="178.7" cy="383.6" r="8"/><circle class="dot c3" cx="178.7" cy="383.6" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 16: 144 ms"><circle class="hit" cx="176.9" cy="378.8" r="8"/><circle class="dot c3" cx="176.9" cy="378.8" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 17: 165 ms"><circle class="hit" cx="177.8" cy="382.0" r="8"/><circle class="dot c3" cx="177.8" cy="382.0" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 18: 146 ms"><circle class="hit" cx="176.9" cy="385.2" r="8"/><circle class="dot c3" cx="176.9" cy="385.2" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 19: 258 ms"><circle class="hit" cx="182.2" cy="380.4" r="8"/><circle class="dot c3" cx="182.2" cy="380.4" r="4"/></g>
+        <g data-tip="EKS · agent · Delete · run 20: 236 ms"><circle class="hit" cx="181.2" cy="383.6" r="8"/><circle class="dot c3" cx="181.2" cy="383.6" r="4"/></g>
+        <line class="p50" x1="178.1" y1="373" x2="178.1" y2="391"/>
+        <text class="s" x="764" y="386">EKS · agent</text><text class="m" x="844" y="386">171 ms · 218 ms</text>
+        <g transform="translate(170,468)"><line class="p50" x1="0" y1="-2" x2="0" y2="-14"/><text class="s" x="8">median per cluster</text><circle class="dot nc" cx="130" cy="-8" r="4"/><text class="s" x="140">one sandbox</text></g>
+      </svg>
+    </div>
+    <figcaption><b>Latency per phase.</b> 20 sandboxes per setup, one at a time after 2 warm-ups (image already on the node). Phases are cumulative from the start of the POST, except delete, which is timed on its own. Readiness is polled every 0.1 s.</figcaption>
+  </figure>
+<figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 230" role="img" aria-labelledby="b3t">
+        <title id="b3t">How the throughput benchmark drives the API</title>
+        <rect class="box" x="20" y="70" width="150" height="80" rx="6"/>
+        <text class="t" x="95" y="100" text-anchor="middle">Job queue</text>
+        <text class="s" x="95" y="118" text-anchor="middle">--per-level jobs</text>
+        <text class="s" x="95" y="134" text-anchor="middle">(16 per level)</text>
+        <rect class="zone" x="210" y="20" width="560" height="190" rx="8"/>
+        <text class="zl" x="226" y="42">N concurrent workers · one AsyncClient</text>
+        <rect class="cp" x="230" y="60" width="104" height="52" rx="6"/><text class="t" x="282" y="82" text-anchor="middle">create</text><text class="ms" x="282" y="99" text-anchor="middle">wait=False</text>
+        <rect class="cp" x="364" y="60" width="104" height="52" rx="6"/><text class="t" x="416" y="82" text-anchor="middle">wait_ready</text><text class="ms" x="416" y="99" text-anchor="middle">poll 0.1 s</text>
+        <rect class="cp" x="498" y="60" width="104" height="52" rx="6"/><text class="t" x="550" y="82" text-anchor="middle">exec true</text><text class="ms" x="550" y="99" text-anchor="middle">.check()</text>
+        <rect class="cp" x="632" y="60" width="118" height="52" rx="6"/><text class="t" x="691" y="82" text-anchor="middle">delete</text><text class="ms" x="691" y="99" text-anchor="middle">purge=True</text>
+        <path class="e" d="M334 86 H362" marker-end="url(#ah)"/>
+        <path class="e" d="M468 86 H496" marker-end="url(#ah)"/>
+        <path class="e" d="M602 86 H630" marker-end="url(#ah)"/>
+        <path class="e" d="M691 112 V160 H282 V114" marker-end="url(#ah)"/>
+        <text class="s halo" x="486" y="164" text-anchor="middle">next job until the queue is empty</text>
+        <rect class="err" x="230" y="172" width="104" height="28" rx="6"/>
+        <text class="s" x="282" y="190" text-anchor="middle">429 → sleep 0.5 s</text>
+        <path class="e d" d="M262 172 V114" marker-end="url(#ah)"/>
+        <path class="e" d="M170 110 H228" marker-end="url(#ah)"/>
+        <rect class="db" x="810" y="70" width="170" height="80" rx="6"/>
+        <text class="t" x="895" y="96" text-anchor="middle">Reported per level</text>
+        <text class="s" x="895" y="116" text-anchor="middle">sandboxes/s = done ÷ wall</text>
+        <text class="s" x="895" y="132" text-anchor="middle">ready, usable · 429 retries</text>
+        <path class="e" d="M770 110 H808" marker-end="url(#ah)"/>
+      </svg>
+    </div>
+    <figcaption><b>Throughput benchmark.</b> Each level drains the same 16 jobs with more workers. Workers retry on 429 (quota full), so the quota, not the client, sets the ceiling. Every setup has the same quota and LimitRange.</figcaption>
+  </figure>
+<div class="charts">
+  <figure>
+    <p class="legend"><span class="l-c1">k3d · PVC</span><span class="l-c2">EKS · EBS</span><span class="l-c3">EKS · agent</span></p>
+    <div class="fig">
+      <svg viewBox="0 0 1000 326" role="img" aria-labelledby="b4t">
+        <title id="b4t">Completed sandboxes per second at each worker count, k3d and EKS</title>
+        <line class="grid" x1="140" y1="220.0" x2="970" y2="220.0"/><text class="ms" x="132" y="224.0" text-anchor="end">0</text>
+        <line class="grid" x1="140" y1="182.0" x2="970" y2="182.0"/><text class="ms" x="132" y="186.0" text-anchor="end">0.25</text>
+        <line class="grid" x1="140" y1="144.0" x2="970" y2="144.0"/><text class="ms" x="132" y="148.0" text-anchor="end">0.5</text>
+        <line class="grid" x1="140" y1="106.0" x2="970" y2="106.0"/><text class="ms" x="132" y="110.0" text-anchor="end">0.75</text>
+        <line class="grid" x1="140" y1="68.0" x2="970" y2="68.0"/><text class="ms" x="132" y="72.0" text-anchor="end">1</text>
+        <line class="grid" x1="140" y1="30.0" x2="970" y2="30.0"/><text class="ms" x="132" y="34.0" text-anchor="end">1.25</text>
+        <text class="t" x="223.0" y="240" text-anchor="middle">1</text>
+        <g data-tip="k3d · PVC · 1 workers: 0.25 sandboxes/s · 16/16 in 64.4 s · 0 429s"><rect class="hit" x="181.0" y="30" width="28" height="190"/><path class="col c1" d="M183.0 220 V186.2 Q183.0 182.2 187.0 182.2 H203.0 Q207.0 182.2 207.0 186.2 V220 Z"/></g>
+        <text class="ms" x="195.0" y="176.2" text-anchor="middle">0.25</text>
+        <text class="ms" x="195.0" y="270" text-anchor="middle">0</text>
+        <g data-tip="EKS · EBS · 1 workers: 0.10 sandboxes/s · 16/16 in 163.3 s · 0 429s"><rect class="hit" x="209.0" y="30" width="28" height="190"/><path class="col c2" d="M211.0 220 V209.1 Q211.0 205.1 215.0 205.1 H231.0 Q235.0 205.1 235.0 209.1 V220 Z"/></g>
+        <text class="ms" x="223.0" y="199.1" text-anchor="middle">0.10</text>
+        <text class="ms" x="223.0" y="292" text-anchor="middle">0</text>
+        <g data-tip="EKS · agent · 1 workers: 0.65 sandboxes/s · 16/16 in 24.7 s · 0 429s"><rect class="hit" x="237.0" y="30" width="28" height="190"/><path class="col c3" d="M239.0 220 V125.7 Q239.0 121.7 243.0 121.7 H259.0 Q263.0 121.7 263.0 125.7 V220 Z"/></g>
+        <text class="ms" x="251.0" y="115.7" text-anchor="middle">0.65</text>
+        <text class="ms" x="251.0" y="314" text-anchor="middle">0</text>
+        <text class="t" x="389.0" y="240" text-anchor="middle">2</text>
+        <g data-tip="k3d · PVC · 2 workers: 0.29 sandboxes/s · 16/16 in 54.4 s · 0 429s"><rect class="hit" x="347.0" y="30" width="28" height="190"/><path class="col c1" d="M349.0 220 V179.3 Q349.0 175.3 353.0 175.3 H369.0 Q373.0 175.3 373.0 179.3 V220 Z"/></g>
+        <text class="ms" x="361.0" y="169.3" text-anchor="middle">0.29</text>
+        <text class="ms" x="361.0" y="270" text-anchor="middle">0</text>
+        <g data-tip="EKS · EBS · 2 workers: 0.12 sandboxes/s · 16/16 in 130.5 s · 0 429s"><rect class="hit" x="375.0" y="30" width="28" height="190"/><path class="col c2" d="M377.0 220 V205.4 Q377.0 201.4 381.0 201.4 H397.0 Q401.0 201.4 401.0 205.4 V220 Z"/></g>
+        <text class="ms" x="389.0" y="195.4" text-anchor="middle">0.12</text>
+        <text class="ms" x="389.0" y="292" text-anchor="middle">0</text>
+        <g data-tip="EKS · agent · 2 workers: 0.83 sandboxes/s · 16/16 in 19.2 s · 0 429s"><rect class="hit" x="403.0" y="30" width="28" height="190"/><path class="col c3" d="M405.0 220 V97.7 Q405.0 93.7 409.0 93.7 H425.0 Q429.0 93.7 429.0 97.7 V220 Z"/></g>
+        <text class="ms" x="417.0" y="87.7" text-anchor="middle">0.83</text>
+        <text class="ms" x="417.0" y="314" text-anchor="middle">0</text>
+        <text class="t" x="555.0" y="240" text-anchor="middle">4</text>
+        <g data-tip="k3d · PVC · 4 workers: 0.32 sandboxes/s · 16/16 in 50.6 s · 0 429s"><rect class="hit" x="513.0" y="30" width="28" height="190"/><path class="col c1" d="M515.0 220 V176.0 Q515.0 172.0 519.0 172.0 H535.0 Q539.0 172.0 539.0 176.0 V220 Z"/></g>
+        <text class="ms" x="527.0" y="166.0" text-anchor="middle">0.32</text>
+        <text class="ms" x="527.0" y="270" text-anchor="middle">0</text>
+        <g data-tip="EKS · EBS · 4 workers: 0.22 sandboxes/s · 16/16 in 71.9 s · 0 429s"><rect class="hit" x="541.0" y="30" width="28" height="190"/><path class="col c2" d="M543.0 220 V190.2 Q543.0 186.2 547.0 186.2 H563.0 Q567.0 186.2 567.0 190.2 V220 Z"/></g>
+        <text class="ms" x="555.0" y="180.2" text-anchor="middle">0.22</text>
+        <text class="ms" x="555.0" y="292" text-anchor="middle">0</text>
+        <g data-tip="EKS · agent · 4 workers: 1.00 sandboxes/s · 16/16 in 16.0 s · 0 429s"><rect class="hit" x="569.0" y="30" width="28" height="190"/><path class="col c3" d="M571.0 220 V72.0 Q571.0 68.0 575.0 68.0 H591.0 Q595.0 68.0 595.0 72.0 V220 Z"/></g>
+        <text class="ms" x="583.0" y="62.0" text-anchor="middle">1.00</text>
+        <text class="ms" x="583.0" y="314" text-anchor="middle">0</text>
+        <text class="t" x="721.0" y="240" text-anchor="middle">8</text>
+        <g data-tip="k3d · PVC · 8 workers: 0.34 sandboxes/s · 16/16 in 47.2 s · 21 429s"><rect class="hit" x="679.0" y="30" width="28" height="190"/><path class="col c1" d="M681.0 220 V172.4 Q681.0 168.4 685.0 168.4 H701.0 Q705.0 168.4 705.0 172.4 V220 Z"/></g>
+        <text class="ms" x="693.0" y="162.4" text-anchor="middle">0.34</text>
+        <text class="ms" x="693.0" y="270" text-anchor="middle">21</text>
+        <g data-tip="EKS · EBS · 8 workers: 0.33 sandboxes/s · 16/16 in 47.8 s · 6 429s"><rect class="hit" x="707.0" y="30" width="28" height="190"/><path class="col c2" d="M709.0 220 V173.1 Q709.0 169.1 713.0 169.1 H729.0 Q733.0 169.1 733.0 173.1 V220 Z"/></g>
+        <text class="ms" x="721.0" y="163.1" text-anchor="middle">0.33</text>
+        <text class="ms" x="721.0" y="292" text-anchor="middle">6</text>
+        <g data-tip="EKS · agent · 8 workers: 0.85 sandboxes/s · 16/16 in 18.9 s · 0 429s"><rect class="hit" x="735.0" y="30" width="28" height="190"/><path class="col c3" d="M737.0 220 V95.0 Q737.0 91.0 741.0 91.0 H757.0 Q761.0 91.0 761.0 95.0 V220 Z"/></g>
+        <text class="ms" x="749.0" y="85.0" text-anchor="middle">0.85</text>
+        <text class="ms" x="749.0" y="314" text-anchor="middle">0</text>
+        <text class="t" x="887.0" y="240" text-anchor="middle">12</text>
+        <g data-tip="k3d · PVC · 12 workers: 0.21 sandboxes/s · 16/16 in 76.1 s · 42 429s"><rect class="hit" x="845.0" y="30" width="28" height="190"/><path class="col c1" d="M847.0 220 V192.0 Q847.0 188.0 851.0 188.0 H867.0 Q871.0 188.0 871.0 192.0 V220 Z"/></g>
+        <text class="ms" x="859.0" y="182.0" text-anchor="middle">0.21</text>
+        <text class="ms" x="859.0" y="270" text-anchor="middle">42</text>
+        <g data-tip="EKS · EBS · 12 workers: 0.21 sandboxes/s · 16/16 in 77.9 s · 24 429s"><rect class="hit" x="873.0" y="30" width="28" height="190"/><path class="col c2" d="M875.0 220 V192.8 Q875.0 188.8 879.0 188.8 H895.0 Q899.0 188.8 899.0 192.8 V220 Z"/></g>
+        <text class="ms" x="887.0" y="182.8" text-anchor="middle">0.21</text>
+        <text class="ms" x="887.0" y="292" text-anchor="middle">24</text>
+        <g data-tip="EKS · agent · 12 workers: 0.74 sandboxes/s · 16/16 in 21.5 s · 30 429s"><rect class="hit" x="901.0" y="30" width="28" height="190"/><path class="col c3" d="M903.0 220 V111.1 Q903.0 107.1 907.0 107.1 H923.0 Q927.0 107.1 927.0 111.1 V220 Z"/></g>
+        <text class="ms" x="915.0" y="101.1" text-anchor="middle">0.74</text>
+        <text class="ms" x="915.0" y="314" text-anchor="middle">30</text>
+        <text class="s" x="132" y="270" text-anchor="end">k3d · PVC 429s</text>
+        <text class="s" x="132" y="292" text-anchor="end">EKS · EBS 429s</text>
+        <text class="s" x="132" y="314" text-anchor="end">EKS · agent 429s</text>
+        <line class="axis" x1="140" y1="220" x2="970" y2="220"/>
+        <line class="grid" x1="140" y1="252" x2="970" y2="252"/>
+        <text class="zl" x="140" y="18">sandboxes per second</text>
+        <text class="s" x="132" y="240" text-anchor="end">workers</text>
+      </svg>
+    </div>
+    <figcaption><b>Throughput</b>, 16 sandboxes per level, each taken from create to deleted. Gains stop once the namespace quota is the bottleneck, which is where 429 retries appear.</figcaption>
+  </figure>
+  <figure>
+    <p class="legend"><span class="l-c1">k3d · PVC</span><span class="l-c2">EKS · EBS</span><span class="l-c3">EKS · agent</span></p>
+    <div class="fig">
+      <svg viewBox="0 0 1000 284" role="img" aria-labelledby="b5t">
+        <title id="b5t">Time until a sandbox is usable at each worker count, median and 90th percentile, k3d and EKS</title>
+        <line class="grid" x1="140" y1="220.0" x2="970" y2="220.0"/><text class="ms" x="132" y="224.0" text-anchor="end">0 s</text>
+        <line class="grid" x1="140" y1="182.0" x2="970" y2="182.0"/><text class="ms" x="132" y="186.0" text-anchor="end">20 s</text>
+        <line class="grid" x1="140" y1="144.0" x2="970" y2="144.0"/><text class="ms" x="132" y="148.0" text-anchor="end">40 s</text>
+        <line class="grid" x1="140" y1="106.0" x2="970" y2="106.0"/><text class="ms" x="132" y="110.0" text-anchor="end">60 s</text>
+        <line class="grid" x1="140" y1="68.0" x2="970" y2="68.0"/><text class="ms" x="132" y="72.0" text-anchor="end">80 s</text>
+        <line class="grid" x1="140" y1="30.0" x2="970" y2="30.0"/><text class="ms" x="132" y="34.0" text-anchor="end">100 s</text>
+        <text class="t" x="223.0" y="240" text-anchor="middle">1</text>
+        <g data-tip="k3d · PVC · 1 workers · usable p50 3.80 s, p90 4.02 s"><rect class="hit" x="191.0" y="30" width="20" height="190"/><line class="rng c1" x1="201.0" y1="212.8" x2="201.0" y2="212.4"/><circle class="dot-o c1" cx="201.0" cy="212.4" r="4.5"/><circle class="dot c1" cx="201.0" cy="212.8" r="5"/></g>
+        <g data-tip="EKS · EBS · 1 workers · usable p50 9.88 s, p90 11.14 s"><rect class="hit" x="213.0" y="30" width="20" height="190"/><line class="rng c2" x1="223.0" y1="201.2" x2="223.0" y2="198.8"/><circle class="dot-o c2" cx="223.0" cy="198.8" r="4.5"/><circle class="dot c2" cx="223.0" cy="201.2" r="5"/></g>
+        <g data-tip="EKS · agent · 1 workers · usable p50 1.33 s, p90 1.52 s"><rect class="hit" x="235.0" y="30" width="20" height="190"/><line class="rng c3" x1="245.0" y1="217.5" x2="245.0" y2="217.1"/><circle class="dot-o c3" cx="245.0" cy="217.1" r="4.5"/><circle class="dot c3" cx="245.0" cy="217.5" r="5"/></g>
+        <text class="t" x="389.0" y="240" text-anchor="middle">2</text>
+        <g data-tip="k3d · PVC · 2 workers · usable p50 4.60 s, p90 11.73 s"><rect class="hit" x="357.0" y="30" width="20" height="190"/><line class="rng c1" x1="367.0" y1="211.3" x2="367.0" y2="197.7"/><circle class="dot-o c1" cx="367.0" cy="197.7" r="4.5"/><circle class="dot c1" cx="367.0" cy="211.3" r="5"/></g>
+        <g data-tip="EKS · EBS · 2 workers · usable p50 12.61 s, p90 20.82 s"><rect class="hit" x="379.0" y="30" width="20" height="190"/><line class="rng c2" x1="389.0" y1="196.0" x2="389.0" y2="180.4"/><circle class="dot-o c2" cx="389.0" cy="180.4" r="4.5"/><circle class="dot c2" cx="389.0" cy="196.0" r="5"/></g>
+        <g data-tip="EKS · agent · 2 workers · usable p50 2.03 s, p90 2.10 s"><rect class="hit" x="401.0" y="30" width="20" height="190"/><line class="rng c3" x1="411.0" y1="216.1" x2="411.0" y2="216.0"/><circle class="dot-o c3" cx="411.0" cy="216.0" r="4.5"/><circle class="dot c3" cx="411.0" cy="216.1" r="5"/></g>
+        <text class="t" x="555.0" y="240" text-anchor="middle">4</text>
+        <g data-tip="k3d · PVC · 4 workers · usable p50 6.98 s, p90 16.74 s"><rect class="hit" x="523.0" y="30" width="20" height="190"/><line class="rng c1" x1="533.0" y1="206.7" x2="533.0" y2="188.2"/><circle class="dot-o c1" cx="533.0" cy="188.2" r="4.5"/><circle class="dot c1" cx="533.0" cy="206.7" r="5"/></g>
+        <g data-tip="EKS · EBS · 4 workers · usable p50 14.28 s, p90 19.64 s"><rect class="hit" x="545.0" y="30" width="20" height="190"/><line class="rng c2" x1="555.0" y1="192.9" x2="555.0" y2="182.7"/><circle class="dot-o c2" cx="555.0" cy="182.7" r="4.5"/><circle class="dot c2" cx="555.0" cy="192.9" r="5"/></g>
+        <g data-tip="EKS · agent · 4 workers · usable p50 3.23 s, p90 3.28 s"><rect class="hit" x="567.0" y="30" width="20" height="190"/><line class="rng c3" x1="577.0" y1="213.9" x2="577.0" y2="213.8"/><circle class="dot-o c3" cx="577.0" cy="213.8" r="4.5"/><circle class="dot c3" cx="577.0" cy="213.9" r="5"/></g>
+        <text class="t" x="721.0" y="240" text-anchor="middle">8</text>
+        <g data-tip="k3d · PVC · 8 workers · usable p50 19.96 s, p90 27.28 s"><rect class="hit" x="689.0" y="30" width="20" height="190"/><line class="rng c1" x1="699.0" y1="182.1" x2="699.0" y2="168.2"/><circle class="dot-o c1" cx="699.0" cy="168.2" r="4.5"/><circle class="dot c1" cx="699.0" cy="182.1" r="5"/></g>
+        <g data-tip="EKS · EBS · 8 workers · usable p50 19.27 s, p90 22.85 s"><rect class="hit" x="711.0" y="30" width="20" height="190"/><line class="rng c2" x1="721.0" y1="183.4" x2="721.0" y2="176.6"/><circle class="dot-o c2" cx="721.0" cy="176.6" r="4.5"/><circle class="dot c2" cx="721.0" cy="183.4" r="5"/></g>
+        <g data-tip="EKS · agent · 8 workers · usable p50 6.28 s, p90 9.00 s"><rect class="hit" x="733.0" y="30" width="20" height="190"/><line class="rng c3" x1="743.0" y1="208.1" x2="743.0" y2="202.9"/><circle class="dot-o c3" cx="743.0" cy="202.9" r="4.5"/><circle class="dot c3" cx="743.0" cy="208.1" r="5"/></g>
+        <text class="t" x="887.0" y="240" text-anchor="middle">12</text>
+        <g data-tip="k3d · PVC · 12 workers · usable p50 27.18 s, p90 74.51 s"><rect class="hit" x="855.0" y="30" width="20" height="190"/><line class="rng c1" x1="865.0" y1="168.4" x2="865.0" y2="78.4"/><circle class="dot-o c1" cx="865.0" cy="78.4" r="4.5"/><circle class="dot c1" cx="865.0" cy="168.4" r="5"/></g>
+        <g data-tip="EKS · EBS · 12 workers · usable p50 29.29 s, p90 57.35 s"><rect class="hit" x="877.0" y="30" width="20" height="190"/><line class="rng c2" x1="887.0" y1="164.4" x2="887.0" y2="111.0"/><circle class="dot-o c2" cx="887.0" cy="111.0" r="4.5"/><circle class="dot c2" cx="887.0" cy="164.4" r="5"/></g>
+        <g data-tip="EKS · agent · 12 workers · usable p50 8.14 s, p90 19.53 s"><rect class="hit" x="899.0" y="30" width="20" height="190"/><line class="rng c3" x1="909.0" y1="204.5" x2="909.0" y2="182.9"/><circle class="dot-o c3" cx="909.0" cy="182.9" r="4.5"/><circle class="dot c3" cx="909.0" cy="204.5" r="5"/></g>
+        <line class="axis" x1="140" y1="220" x2="970" y2="220"/>
+        <text class="zl" x="140" y="18">time until usable</text>
+        <text class="s" x="132" y="240" text-anchor="end">workers</text>
+        <g transform="translate(140,270)"><circle class="dot nc" cx="5" cy="-4" r="5"/><text class="s" x="16">median (p50)</text><circle class="dot-o nc" cx="120" cy="-4" r="4.5"/><text class="s" x="131">p90</text></g>
+      </svg>
+    </div>
+    <figcaption><b>Latency under load.</b> Time from the successful POST until a command has run, not counting time spent retrying 429s.</figcaption>
+  </figure>
+</div>
+<details class="data"><summary>Show the numbers</summary>
+  <div class="tbl"><table>
+    <thead><tr><th>Phase</th><th>Cluster</th><th>mean</th><th>p50</th><th>p90</th><th>p99</th><th>min</th><th>max</th></tr></thead>
+    <tbody>
+      <tr><td>Accepted</td><td>k3d · PVC</td><td class="num">264 ms</td><td class="num">222 ms</td><td class="num">372 ms</td><td class="num">410 ms</td><td class="num">190 ms</td><td class="num">410 ms</td></tr>
+      <tr><td>Accepted</td><td>EKS · EBS</td><td class="num">138 ms</td><td class="num">135 ms</td><td class="num">150 ms</td><td class="num">191 ms</td><td class="num">114 ms</td><td class="num">191 ms</td></tr>
+      <tr><td>Accepted</td><td>EKS · agent</td><td class="num">171 ms</td><td class="num">183 ms</td><td class="num">199 ms</td><td class="num">262 ms</td><td class="num">86 ms</td><td class="num">262 ms</td></tr>
+      <tr><td>Ready</td><td>k3d · PVC</td><td class="num">3.40 s</td><td class="num">3.38 s</td><td class="num">3.57 s</td><td class="num">3.58 s</td><td class="num">3.35 s</td><td class="num">3.58 s</td></tr>
+      <tr><td>Ready</td><td>EKS · EBS</td><td class="num">9.93 s</td><td class="num">9.72 s</td><td class="num">10.77 s</td><td class="num">10.95 s</td><td class="num">9.59 s</td><td class="num">10.95 s</td></tr>
+      <tr><td>Ready</td><td>EKS · agent</td><td class="num">935 ms</td><td class="num">976 ms</td><td class="num">1.05 s</td><td class="num">1.11 s</td><td class="num">701 ms</td><td class="num">1.11 s</td></tr>
+      <tr><td>Usable</td><td>k3d · PVC</td><td class="num">3.83 s</td><td class="num">3.80 s</td><td class="num">3.99 s</td><td class="num">4.04 s</td><td class="num">3.76 s</td><td class="num">4.04 s</td></tr>
+      <tr><td>Usable</td><td>EKS · EBS</td><td class="num">10.11 s</td><td class="num">9.91 s</td><td class="num">10.95 s</td><td class="num">11.11 s</td><td class="num">9.79 s</td><td class="num">11.11 s</td></tr>
+      <tr><td>Usable</td><td>EKS · agent</td><td class="num">1.31 s</td><td class="num">1.37 s</td><td class="num">1.46 s</td><td class="num">1.48 s</td><td class="num">921 ms</td><td class="num">1.48 s</td></tr>
+      <tr><td>Delete</td><td>k3d · PVC</td><td class="num">183 ms</td><td class="num">187 ms</td><td class="num">197 ms</td><td class="num">201 ms</td><td class="num">144 ms</td><td class="num">201 ms</td></tr>
+      <tr><td>Delete</td><td>EKS · EBS</td><td class="num">119 ms</td><td class="num">117 ms</td><td class="num">133 ms</td><td class="num">142 ms</td><td class="num">105 ms</td><td class="num">142 ms</td></tr>
+      <tr><td>Delete</td><td>EKS · agent</td><td class="num">169 ms</td><td class="num">171 ms</td><td class="num">218 ms</td><td class="num">258 ms</td><td class="num">91 ms</td><td class="num">258 ms</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Workers</th><th>Cluster</th><th>Done</th><th>Wall</th><th>Sandboxes/s</th><th>Ready p50</th><th>Ready p90</th><th>Usable p50</th><th>Usable p90</th><th>429 retries</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td>k3d · PVC</td><td class="num">16/16</td><td class="num">64.4 s</td><td class="num">0.25</td><td class="num">3.39 s</td><td class="num">3.58 s</td><td class="num">3.80 s</td><td class="num">4.02 s</td><td class="num">0</td></tr>
+      <tr><td class="num">1</td><td>EKS · EBS</td><td class="num">16/16</td><td class="num">163.3 s</td><td class="num">0.10</td><td class="num">9.72 s</td><td class="num">10.95 s</td><td class="num">9.88 s</td><td class="num">11.14 s</td><td class="num">0</td></tr>
+      <tr><td class="num">1</td><td>EKS · agent</td><td class="num">16/16</td><td class="num">24.7 s</td><td class="num">0.65</td><td class="num">982 ms</td><td class="num">1.08 s</td><td class="num">1.33 s</td><td class="num">1.52 s</td><td class="num">0</td></tr>
+      <tr><td class="num">2</td><td>k3d · PVC</td><td class="num">16/16</td><td class="num">54.4 s</td><td class="num">0.29</td><td class="num">3.78 s</td><td class="num">10.92 s</td><td class="num">4.60 s</td><td class="num">11.73 s</td><td class="num">0</td></tr>
+      <tr><td class="num">2</td><td>EKS · EBS</td><td class="num">16/16</td><td class="num">130.5 s</td><td class="num">0.12</td><td class="num">11.77 s</td><td class="num">20.30 s</td><td class="num">12.61 s</td><td class="num">20.82 s</td><td class="num">0</td></tr>
+      <tr><td class="num">2</td><td>EKS · agent</td><td class="num">16/16</td><td class="num">19.2 s</td><td class="num">0.83</td><td class="num">1.18 s</td><td class="num">1.24 s</td><td class="num">2.03 s</td><td class="num">2.10 s</td><td class="num">0</td></tr>
+      <tr><td class="num">4</td><td>k3d · PVC</td><td class="num">16/16</td><td class="num">50.6 s</td><td class="num">0.32</td><td class="num">5.17 s</td><td class="num">15.73 s</td><td class="num">6.98 s</td><td class="num">16.74 s</td><td class="num">0</td></tr>
+      <tr><td class="num">4</td><td>EKS · EBS</td><td class="num">16/16</td><td class="num">71.9 s</td><td class="num">0.22</td><td class="num">12.83 s</td><td class="num">18.18 s</td><td class="num">14.28 s</td><td class="num">19.64 s</td><td class="num">0</td></tr>
+      <tr><td class="num">4</td><td>EKS · agent</td><td class="num">16/16</td><td class="num">16.0 s</td><td class="num">1.00</td><td class="num">1.58 s</td><td class="num">1.67 s</td><td class="num">3.23 s</td><td class="num">3.28 s</td><td class="num">0</td></tr>
+      <tr><td class="num">8</td><td>k3d · PVC</td><td class="num">16/16</td><td class="num">47.2 s</td><td class="num">0.34</td><td class="num">17.67 s</td><td class="num">24.86 s</td><td class="num">19.96 s</td><td class="num">27.28 s</td><td class="num">21</td></tr>
+      <tr><td class="num">8</td><td>EKS · EBS</td><td class="num">16/16</td><td class="num">47.8 s</td><td class="num">0.33</td><td class="num">16.79 s</td><td class="num">21.12 s</td><td class="num">19.27 s</td><td class="num">22.85 s</td><td class="num">6</td></tr>
+      <tr><td class="num">8</td><td>EKS · agent</td><td class="num">16/16</td><td class="num">18.9 s</td><td class="num">0.85</td><td class="num">3.02 s</td><td class="num">6.47 s</td><td class="num">6.28 s</td><td class="num">9.00 s</td><td class="num">0</td></tr>
+      <tr><td class="num">12</td><td>k3d · PVC</td><td class="num">16/16</td><td class="num">76.1 s</td><td class="num">0.21</td><td class="num">22.51 s</td><td class="num">73.68 s</td><td class="num">27.18 s</td><td class="num">74.51 s</td><td class="num">42</td></tr>
+      <tr><td class="num">12</td><td>EKS · EBS</td><td class="num">16/16</td><td class="num">77.9 s</td><td class="num">0.21</td><td class="num">24.48 s</td><td class="num">56.48 s</td><td class="num">29.29 s</td><td class="num">57.35 s</td><td class="num">24</td></tr>
+      <tr><td class="num">12</td><td>EKS · agent</td><td class="num">16/16</td><td class="num">21.5 s</td><td class="num">0.74</td><td class="num">3.15 s</td><td class="num">16.78 s</td><td class="num">8.14 s</td><td class="num">19.53 s</td><td class="num">30</td></tr>
+    </tbody>
+  </table></div>
+</details>
+<!-- bench:charts:end -->
+</section>
+
+<!-- ───────────────────────────── 14 ───────────────────────────── -->
+<section id="limits">
+  <h2><span class="num">14</span>Known limits</h2>
+  <ul>
+    <li><strong>No authentication.</strong> Anyone who can reach the Service can create sandboxes and exec into them. Access is gated by <code>kubectl port-forward</code>, and the NetworkPolicy keeps sandboxes from reaching the API.</li>
+    <li><strong>Timeouts don't kill processes.</strong> A timed-out execution closes its stream, but the process may keep running in the container until the sandbox goes.</li>
+    <li><strong>Workspaces are only as durable as the last snapshot.</strong> If a node or pod is lost while a sandbox runs, it comes back with its last snapshot (or empty); writes since then are gone. Snapshots happen on pause, delete and just before expiry, not periodically.</li>
+    <li><strong>Pause and delete cost grows with workspace size,</strong> since both upload the whole workspace as one tar; reading one file from a paused or gone sandbox also scans the snapshot from the start.</li>
+    <li><strong>The node agent is a sensitive component.</strong> It mounts the kubelet's pods directory, so a bug in it can expose other pods' files on the node, not just workspaces. Keep it small and hardened.</li>
+    <li><strong>No NetworkPolicy on EKS yet.</strong> Sandboxes can reach other pods there, including the agent (which requires its token) and the API (which has no authentication).</li>
+        <li><strong>The workspace limit is enforced by eviction.</strong> The kubelet evicts a pod whose emptyDir passes 1Gi, rather than failing writes; the node's disk is shared by all pods on it.</li>
+    <li><strong>Output caps.</strong> stdout and stderr are each capped at 1 MiB per execution, flagged with <code>*_truncated</code>; use files for larger output.</li>
+    <li><strong>Small capacity.</strong> The quota still fits only about 12 default sandboxes, sized for the old 2 CPU VM and kept for comparable benchmarks; the EKS nodes have far more room.</li>
+    <li><strong>Partial priority protection.</strong> kube-system and the agent-sandbox controller are not shielded from eviction by the PriorityClass.</li>
+    <li><strong>Legacy rows.</strong> Rows from before TTLs never expire; rows from before workspaces existed are purged on delete; rows with a PVC (from before snapshots) have no files API (409), and purge and GC delete their PVC.</li>
+  </ul>
+</section>
+</main>
+</div>
+<div id="tip" role="tooltip"></div>
+<script>
+// Chart tooltips: any SVG element with data-tip shows it near the pointer.
+(function () {
+  var tip = document.getElementById("tip");
+  document.addEventListener("pointermove", function (e) {
+    var t = e.target.closest && e.target.closest("[data-tip]");
+    if (!t) { tip.style.display = "none"; return; }
+    tip.textContent = t.getAttribute("data-tip");
+    tip.style.display = "block";
+    var x = e.clientX + 14, y = e.clientY + 14, r = tip.getBoundingClientRect();
+    if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 14;
+    if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 14;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  });
+})();
+</script>
+</body>
+</html>

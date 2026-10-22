@@ -1,0 +1,113 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sandbox-manager
+  namespace: webapp
+---
+# New sandboxes go in the `sandboxes` namespace (see sandboxes.yaml). This
+# Role covers sandboxes created in `webapp` before that, until they're deleted.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sandbox-manager-sandboxes
+  namespace: webapp
+rules:
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes]
+    verbs: [create, get, list, delete]
+  # Find a sandbox's pod and exec into its user container.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sandbox-manager-sandboxes
+  namespace: webapp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sandbox-manager-sandboxes
+subjects:
+  - kind: ServiceAccount
+    name: sandbox-manager
+    namespace: webapp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-manager
+  namespace: webapp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sandbox-manager
+  template:
+    metadata:
+      labels:
+        app: sandbox-manager
+    spec:
+      serviceAccountName: sandbox-manager
+      priorityClassName: sandbox-control-plane
+      containers:
+        - name: sandbox-manager
+          image: sandbox-manager:dev
+          imagePullPolicy: Never # loaded with `k3d image import`
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres
+                  key: password
+            - name: DATABASE_URL
+              value: postgres://webapp:$(DB_PASSWORD)@postgres:5432/webapp?sslmode=disable
+            - name: SANDBOX_NAMESPACE
+              value: sandboxes
+            # Workspace snapshots (S3) and the node agents (k8s/agent.yaml).
+            - name: SNAPSHOT_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: snapshots
+                  key: bucket
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: snapshots
+                  key: region
+            - name: AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sandbox-agent
+                  key: token
+          # Requests above actual use (~10Mi) so the kubelet never picks these
+          # pods for eviction under memory pressure.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-manager
+  namespace: webapp
+spec:
+  selector:
+    app: sandbox-manager
+  ports:
+    - port: 80
+      targetPort: 8080

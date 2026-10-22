@@ -1,0 +1,18 @@
+# Cluster-scoped objects; deploy.sh applies this file before the rest of k8s/.
+#
+# Control-plane pods (sandbox-manager, postgres) get a high priority so that
+# under memory pressure the kubelet evicts sandbox pods first.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: sandbox-control-plane
+value: 1000000
+globalDefault: false
+description: SandboxManager API and its database; evicted after sandbox pods.
+---
+# Sandboxes run in their own namespace so a quota can bound them without
+# touching the control plane in `webapp`. See sandboxes.yaml.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sandboxes

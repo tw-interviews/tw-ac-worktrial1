@@ -1,0 +1,122 @@
+# Bounds on everything running in the `sandboxes` namespace, sized for the
+# 2 CPU / 2 GiB Colima VM (about half its memory is k3s and system pods).
+# Raise these together with the VM: `colima stop && colima start --cpu 4 --memory 8`.
+#
+# The API dry-runs each sandbox pod against these before creating it, so an
+# over-quota create fails fast with 429 instead of leaving a Sandbox pending.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: sandboxes
+  namespace: sandboxes
+spec:
+  hard:
+    pods: "20"
+    requests.cpu: "1"
+    requests.memory: 512Mi
+    limits.memory: 768Mi
+    # Only legacy sandboxes (from when each had a PVC) still have volumes;
+    # workspaces are now emptyDirs (1Gi sizeLimit) saved to S3 as snapshots.
+    persistentvolumeclaims: "40"
+    requests.storage: 40Gi
+---
+# Defaults for sandboxes that don't set resources (and a per-container
+# ceiling), so every sandbox pod has requests/limits the quota can count.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: sandboxes
+  namespace: sandboxes
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 25m
+        memory: 32Mi
+      default:
+        cpu: 500m
+        memory: 64Mi
+      max:
+        cpu: "1"
+        memory: 512Mi
+---
+# Network isolation for every pod in this namespace (enforced by k3s's
+# built-in network policy controller):
+# - Ingress: nothing. Sandboxes can't reach each other, and nothing else can
+#   connect to them over the network. (Executions don't use the pod network;
+#   they go through the Kubernetes API and kubelet.)
+# - Egress: cluster DNS, and public internet addresses only. Every private
+#   range is excluded, which covers other pods (10.42/16), services such as
+#   the SandboxManager API, Postgres and the Kubernetes API (10.43/16, which
+#   resolve to pod or node IPs), the node itself (172.18/16), and link-local
+#   metadata addresses.
+# Covered by sdk/python/tests/test_isolation.py.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-isolation
+  namespace: sandboxes
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sandbox-manager-sandboxes
+  namespace: sandboxes
+rules:
+  # patch: refresh spec.shutdownTime (the TTL) on every execution.
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes]
+    verbs: [create, get, list, patch, delete]
+  # create: dry-run sandbox pods against the quota/LimitRange before creating
+  # the Sandbox. get/list: find a sandbox's pod (to exec into, or to reach
+  # its workspace through the node agent), and pods waiting for a restore.
+  # delete: a legacy sandbox's recovery pod (rcv-<id>), on purge or GC.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, get, list, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+  # Legacy: sandboxes from when every sandbox had a PVC; delete their volume
+  # when they're purged or garbage-collected.
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sandbox-manager-sandboxes
+  namespace: sandboxes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sandbox-manager-sandboxes
+subjects:
+  - kind: ServiceAccount
+    name: sandbox-manager
+    namespace: webapp

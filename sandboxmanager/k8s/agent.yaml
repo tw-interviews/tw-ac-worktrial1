@@ -1,0 +1,111 @@
+# sandbox-agent: one per node, does all file I/O on the workspaces (emptyDir
+# volumes) of the sandbox pods on its node for the API: live file requests,
+# snapshots to S3 and restores. See agent/main.go.
+#
+# HARDENING: it mounts the kubelet's pods directory from the host, which also
+# holds every other pod's volumes on the node (Secrets, service account
+# tokens). It runs as root (it must read and write files any sandbox user
+# created) but with only file-handling capabilities, a read-only root
+# filesystem and no Kubernetes credentials, and only the API may call it
+# (bearer token from Secret sandbox-agent; NetworkPolicy below where it's
+# enforced). Keep the agent small and keep it that way.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sandbox-agent
+  namespace: webapp
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sandbox-agent
+  namespace: webapp
+spec:
+  selector:
+    matchLabels:
+      app: sandbox-agent
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: sandbox-agent
+    spec:
+      serviceAccountName: sandbox-agent
+      automountServiceAccountToken: false
+      priorityClassName: sandbox-control-plane
+      tolerations:
+        - operator: Exists # every node that can run sandboxes
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: agent
+          image: sandbox-agent:dev
+          imagePullPolicy: Never # loaded with `k3d image import`
+          ports:
+            - containerPort: 8090
+          env:
+            - name: AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sandbox-agent
+                  key: token
+            - name: SNAPSHOT_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: snapshots
+                  key: bucket
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: snapshots
+                  key: region
+            - name: PODS_DIR
+              value: /var/lib/kubelet/pods
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8090
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, DAC_OVERRIDE, DAC_READ_SEARCH, FOWNER, FSETID]
+          volumeMounts:
+            - name: pods
+              mountPath: /var/lib/kubelet/pods
+      volumes:
+        - name: pods
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+---
+# Only the API may call the agents. (Enforced where NetworkPolicy is, e.g.
+# k3s; elsewhere the bearer token is the only check.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-agent
+  namespace: webapp
+spec:
+  podSelector:
+    matchLabels:
+      app: sandbox-agent
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: sandbox-manager
+      ports:
+        - port: 8090
