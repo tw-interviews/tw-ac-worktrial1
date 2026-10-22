@@ -1,0 +1,21 @@
+cell	pool_depth	calls	errors	tool_calls_per_s	acquire_p50	acquire_p95	e2e_p50	e2e_p95	stopped
+closed-loop_sandboxmanager_w01	0	40	0	0.68	1.05	1.069	1.485	1.647	
+closed-loop_agent-sandbox-cold_w01	0	42	0	0.68	0.435	2.466	0.805	2.723	
+closed-loop_sandboxmanager_w04	0	39	0	0.57	1.061	28.757	1.512	29.075	
+closed-loop_agent-sandbox-cold_w04	0	60	0	1.09	0.548	15.166	0.905	15.538	
+closed-loop_sandboxmanager_w16	0	106	0	1.74	1.128	27.296	1.637	27.87	proc 0: a call in flight over 60s
+closed-loop_agent-sandbox-cold_w16	0	111	0	1.8	0.871	24.386	1.32	24.662	proc 0: a call in flight over 60s
+closed-loop_sandboxmanager_w32	0	120	0	1.76	1.991	29.88	2.569	30.192	proc 0: a call in flight over 60s
+closed-loop_agent-sandbox-cold_w32	0	143	0	2.01	1.897	28.901	2.23	29.215	proc 0: a call in flight over 60s
+closed-loop_agent-sandbox-pool32_w04	32	136	0	2.12	0.22	16.85	0.644	17.175	
+closed-loop_agent-sandbox-pool32_w16	32	186	0	2.52	0.378	29.781	0.868	30.123	
+burst_agent-sandbox-cold_n32	0	32	0	1.86	2.17	13.641	2.508	14.193	
+burst_sandboxmanager_n32	0	32	0	7.65	2.834	3.523	3.309	4.016	
+burst_agent-sandbox-pool32_n32	32	32	0	18.31	0.678	0.896	1.271	1.516	
+open-loop_sandboxmanager_r0.5	0	39	0	0.68	1.056	1.096	1.467	1.592	
+open-loop_sandboxmanager_r1	0	70	0	1.02	1.054	14.406	1.494	14.877	
+open-loop_sandboxmanager_r2	0	125	0	1.94	1.061	23.613	1.502	24.037	
+open-loop_sandboxmanager_r3	0	179	0	2.46	1.079	26.22	1.562	26.766	
+open-loop_agent-sandbox-cold_r0.5	0	39	0	0.69	0.464	1.454	0.809	1.837	
+open-loop_agent-sandbox-cold_r1	0	70	0	1.01	0.424	13.748	0.768	14.066	
+open-loop_agent-sandbox-cold_r2	0	125	0	1.78	0.531	15.227	0.873	15.59	

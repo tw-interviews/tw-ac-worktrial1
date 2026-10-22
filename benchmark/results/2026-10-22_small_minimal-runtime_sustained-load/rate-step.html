@@ -1,0 +1,23 @@
+<h2>How long each rate step runs</h2>
+<p class="read">Each offered rate is one cell. Arrivals run for the warm-up plus the measured duration: 5 s + 25 s for the agent-sandbox sweeps, and 15 s + 60 s for SandboxManager. Calls still in flight then finish (the drain; nothing is cut off). The warm pool is reset before the next rate starts (the cooldown). Below saturation the drain is about a second. Once an arm falls behind, the drain can outlast the arrivals.</p>
+<div class="phases" role="img" aria-label="Timeline of one rate step, pool of 50: at 3 calls/s 5 s warm-up, 25 s measured, 2 s drain; at 6 calls/s 5 s warm-up, 25 s measured, 41 s drain; then a cooldown of about 5 to 30 s">
+  <div class="phase-row"><span>Pool 50 at 3 calls/s<br><span class="note">keeping up</span></span>
+    <div class="phase-bar"><span class="ph-warm" style="flex:5">5 s</span><span class="ph-meas" style="flex:25">measured 25 s</span><span class="ph-drain" style="flex:2" title="drain 2 s"></span><span class="ph-cool" style="flex:15">cooldown</span><span style="flex:39"></span></div></div>
+  <div class="phase-row"><span>Pool 50 at 6 calls/s<br><span class="note">saturated</span></span>
+    <div class="phase-bar"><span class="ph-warm" style="flex:5">5 s</span><span class="ph-meas" style="flex:25">measured 25 s</span><span class="ph-drain" style="flex:41">drain 41 s</span><span class="ph-cool" style="flex:15">cooldown</span></div></div>
+  <div class="legend"><span><i style="border-top:8px solid var(--grid)"></i>warm-up (not measured)</span><span><i style="border-top:8px solid var(--muted)"></i>measured arrivals</span><span><i style="border-top:8px solid var(--band)"></i>drain: calls in flight finish</span><span><i class="dash" style="border-top-color:var(--rule)"></i>cooldown and copy-back, ~5–30 s</span></div>
+</div>
+<div class="table-scroll"><table>
+  <thead><tr><th>Sweep</th><th class="n">Arrivals</th><th>Drain (by offered rate)</th><th class="n">Wall clock per step</th><th class="n">Whole sweep</th></tr></thead>
+  <tbody>
+    <tr><td>SandboxManager</td><td class="n">15 + 60 s</td><td>1–11 s up to 2/s; 17 s at 3/s, 26 s at 4/s, 24 s at 6/s (stop rule ended arrivals at 29 s)</td><td class="n">81–95 s, then 963 s and 1025 s</td><td class="n">45 min</td></tr>
+    <tr><td>agent-sandbox, cold start</td><td class="n">5 + 25 s</td><td>1 s up to 1/s; 16 s at 2–3/s, 27 s at 4–6/s</td><td class="n">36–64 s</td><td class="n">~5 min</td></tr>
+    <tr><td>agent-sandbox, pool 32</td><td class="n">5 + 25 s</td><td>0–1 s up to 2/s; 15 s at 3/s, 24 s at 4/s, 34 s at 6/s</td><td class="n">36–70 s</td><td class="n">~6 min</td></tr>
+    <tr><td>agent-sandbox, pool 50</td><td class="n">5 + 25 s</td><td>0–2 s up to 3/s; 30 s at 4/s, 41 s at 6/s</td><td class="n">36–77 s</td><td class="n">~6 min</td></tr>
+  </tbody>
+</table></div>
+<ul>
+  <li><b>Measured windows include the drain.</b> Delivered calls/s divides completed calls by the time from the first measured call to the last release, so at saturating rates a 25 s cell reports a 48–66 s window.</li>
+  <li><b>The long SandboxManager steps are cooldown.</b> After the 3 and 4 calls/s cells, the harness waited 16–17 minutes for that rate's sandbox pods to finish terminating before starting the next rate.</li>
+  <li><b>A 30 s step is about as long as a 50-sandbox pool lasts.</b> In longer runs (next panel) pool 50 was empty after ~32 s at 3 calls/s and ~27 s at 4 calls/s, because refills start slowly and average only ~2.5/s under churn. A 30 s step ends right around that point, so the sweep shows the pool at its best. At 3 calls/s the refills nearly keep up even once it's empty (94% of calls still pooled over 150 s); at 4 calls/s they don't (74%, acquire p95 17 s).</li>
+</ul>

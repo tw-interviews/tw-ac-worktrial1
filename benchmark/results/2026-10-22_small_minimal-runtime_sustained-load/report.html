@@ -1,0 +1,354 @@
+<title>Sustained load to 50% degradation</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: a benchmark report. Headline figures, one panel per experiment (chart + one line of reading), every cell in a table. Series colors: the dataviz reference palette in fixed slot order, one color per sandbox source on every page. */
+  :root {
+    --bg: #f4f5f7; --panel: #fcfcfb; --ink: #0b0b0b; --muted: #52514e; --rule: #dcdfe5; --grid: #ebedf0;
+    --band: #fbefe2; --band-ink: #8f4a12;
+    --s-sandboxmanager: #2a78d6; --s-agent-sandbox-cold: #eb6834; --s-agent-sandbox-pool32: #1baf7a;
+    --s-agent-sandbox-pool16: #eda100; --s-agent-sandbox-pool8: #e87ba4; --s-reuse: #008300; --s-agent-sandbox-pool50: #6250d6;
+    --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark; --bg: #121211; --panel: #1a1a19; --ink: #f0efec; --muted: #c3c2b7; --rule: #33332f; --grid: #2a2a27;
+      --band: #2e2216; --band-ink: #f3b77a;
+      --s-sandboxmanager: #3987e5; --s-agent-sandbox-cold: #d95926; --s-agent-sandbox-pool32: #199e70;
+      --s-agent-sandbox-pool16: #c98500; --s-agent-sandbox-pool8: #d55181; --s-reuse: #008300; --s-agent-sandbox-pool50: #9085e9;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark; --bg: #121211; --panel: #1a1a19; --ink: #f0efec; --muted: #c3c2b7; --rule: #33332f; --grid: #2a2a27;
+    --band: #2e2216; --band-ink: #f3b77a;
+    --s-sandboxmanager: #3987e5; --s-agent-sandbox-cold: #d95926; --s-agent-sandbox-pool32: #199e70;
+    --s-agent-sandbox-pool16: #c98500; --s-agent-sandbox-pool8: #d55181; --s-reuse: #008300; --s-agent-sandbox-pool50: #9085e9;
+  }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-size: 15px; line-height: 1.55; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding-block: 32px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: grid; gap: 28px; }
+  header { display: grid; gap: 8px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+  h2 { font-size: 17px; line-height: 1.3; margin: 0; font-weight: 600; text-wrap: balance; }
+  p { margin: 0; max-width: 74ch; }
+  .lede { color: var(--muted); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .tile { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; display: grid; gap: 4px; align-content: start; }
+  .tile .k { font-size: 13px; color: var(--muted); }
+  .tile .v { font-family: var(--font-mono); font-size: 24px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .tile .s { font-size: 13px; color: var(--muted); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 16px; }
+  @media (max-width: 520px) { .grid2 { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+  .panel[hidden] { display: none; }
+  h3.sub { font-size: 14px; font-weight: 600; margin: 0 0 6px; }
+  /* Phase timelines in --section fragments: neutral fills, every segment labelled. */
+  .phases { display: grid; gap: 10px; }
+  .phase-row { display: grid; grid-template-columns: minmax(0, 150px) 1fr; gap: 12px; align-items: center; font-size: 13px; }
+  .phase-bar { display: flex; gap: 2px; height: 26px; min-width: 0; }
+  .phase-bar span { display: flex; align-items: center; justify-content: center; border-radius: 4px; font-size: 11px; white-space: nowrap; overflow: hidden; min-width: 0; }
+  .ph-warm { background: var(--grid); color: var(--muted); }
+  .ph-meas { background: var(--muted); color: var(--panel); }
+  .ph-drain { background: var(--band); color: var(--band-ink); }
+  .ph-cool { border: 1.5px dashed var(--rule); color: var(--muted); }
+  .read { font-size: 14px; color: var(--muted); }
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  svg text { font-family: var(--font-sans); }
+  .ax { fill: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+  .axt { fill: var(--muted); font-size: 11.5px; }
+  .gl { stroke: var(--grid); stroke-width: 1; }
+  .base { stroke: var(--rule); stroke-width: 1; }
+  .lbl { fill: var(--ink); font-size: 11.5px; font-family: var(--font-mono); }
+  .band { fill: var(--band); }
+  .bandt { fill: var(--band-ink); font-size: 11px; font-weight: 600; }
+  .ref { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 4; fill: none; }
+  .ref.half { stroke-dasharray: 1 4; }
+  .reft { fill: var(--muted); font-size: 11px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 16px; height: 0; border-top: 3px solid; display: inline-block; }
+  .legend i.dash { border-top-style: dashed; border-top-width: 2px; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--rule);
+    border-radius: 6px; padding: 6px 9px; font-size: 12.5px; box-shadow: 0 4px 14px rgb(0 0 0 / 0.12); white-space: nowrap; z-index: 2; display: none; }
+  .tip b { font-weight: 600; }
+  .tip .m { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .table-scroll { overflow-x: auto; background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; min-width: 820px; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+  td.n, th.n { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  th { font-size: 11.5px; font-weight: 500; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; background: var(--panel); }
+  tr.group td { font-weight: 600; background: var(--bg); }
+  tr:last-child td { border-bottom: 0; }
+  .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 8px; }
+  ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+  li { font-size: 14px; max-width: 82ch; }
+  .note { font-size: 13px; color: var(--muted); }
+  td.test { min-width: 280px; max-width: 420px; font-size: 13px; }
+  td.test code { display: block; margin-top: 4px; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+  .tip .tt { margin-top: 6px; max-width: 260px; color: var(--muted); font-size: 12px; white-space: normal; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">EKS 1.37 · 5 × c7i-flex.large · small profile · ~10 MB minimal runtime · 2026-10-22 · 24 cells · 11 errors</div>
+    <h1>Sustained load to 50% degradation</h1>
+    <p class="lede">Open-loop sweeps: tool calls arrive on a Poisson schedule at a fixed rate (each sleeps N(300 ms, 75 ms) in its own sandbox), and the rate steps up until delivered throughput falls below half of offered. At most 64 calls are in flight; arrivals beyond that are dropped and counted as errors. SandboxManager cells ran 60 s after a 15 s warm-up; the agent-sandbox cells (cold start, and warm pools of 32 and 50) ran 25 s after a 5 s warm-up.</p>
+  </header>
+  <div class="tiles"><div class="tile"><span class="k">Highest delivered rate</span><span class="v">3.22/s</span><span class="s">agent-sandbox, pool 50, offered 3/s</span></div><div class="tile"><span class="k">Below 50%: agent-sandbox, cold start</span><span class="v">6/s offered</span><span class="s">delivered 2.82/s (47%), errors 5/152</span></div><div class="tile"><span class="k">Below 50%: agent-sandbox, pool 32</span><span class="v">6/s offered</span><span class="s">delivered 2.58/s (43%), errors 0/152</span></div><div class="tile"><span class="k">Below 50%: agent-sandbox, pool 50</span><span class="v">6/s offered</span><span class="s">delivered 2.31/s (38%), errors 0/152</span></div><div class="tile"><span class="k">Below 50%: SandboxManager</span><span class="v">6/s offered</span><span class="s">delivered 2.03/s (34%), errors 6/82</span></div></div>
+  <div class="grid2">
+    <section class="panel"><h2>Tool calls per second as workers grow</h2><div class="chart" id="c-throughput"></div><div class="legend" id="l-throughput"></div>
+      <p class="read">One sandbox per call: every arm that creates sandboxes is capped by how fast the cluster turns pods over.</p></section>
+    <section class="panel"><h2>Time to get a sandbox (acquire p50)</h2><div class="chart" id="c-acquire"></div><div class="legend" id="l-acquire"></div>
+      <p class="read">How long a worker waits from asking for a sandbox until it can run a tool.</p></section>
+    <section class="panel"><h2>Reused sandboxes against the ideal</h2><div class="chart" id="c-reuse"></div>
+      <div class="legend"><span><i style="border-top-color:var(--s-reuse)"></i>agent-sandbox, reused</span><span><i class="dash" style="border-top-color:var(--muted)"></i>ideal: workers ÷ 0.3 s</span></div>
+      <p class="read">With nothing created per call, throughput tracks the ideal: creating sandboxes is the whole cost.</p></section>
+    <section class="panel"><h2>Bursts: N tool calls fired at once</h2><div class="chart" id="c-burst"></div>
+      <p class="read">How fast a fan-out of calls is absorbed.</p></section>
+    <section class="panel"><h2>Sustained load: delivered vs offered rate</h2><div class="chart" id="c-open"></div><div class="legend" id="l-open"></div>
+      <p class="read">Each sweep raises the offered rate until delivered falls below 50% of it (sweeps run before that rule stopped at 90%, or at a stop rule).</p></section>
+    <section class="panel"><h2>Error rate as offered load rises</h2><div class="chart" id="c-err"></div><div class="legend" id="l-err"></div>
+      <p class="read">Failed calls plus arrivals dropped at the in-flight cap, as a share of the cell's calls. A cell stops issuing calls once 5% of the last 30 s failed, so this reads as "where the stop rule fired", not how high errors would climb.</p></section>
+    <section class="panel"><h2>Tail latency (end-to-end p95)</h2><div class="chart" id="c-tail"></div><div class="legend" id="l-tail"></div>
+      <p class="read">Long tails here are pod-IP retries on the test nodes, not tool time.</p></section>
+  </div>
+  <section class="panel"><h2>How long each rate step runs</h2>
+<p class="read">Each offered rate is one cell. Arrivals run for the warm-up plus the measured duration: 5 s + 25 s for the agent-sandbox sweeps, and 15 s + 60 s for SandboxManager. Calls still in flight then finish (the drain; nothing is cut off). The warm pool is reset before the next rate starts (the cooldown). Below saturation the drain is about a second. Once an arm falls behind, the drain can outlast the arrivals.</p>
+<div class="phases" role="img" aria-label="Timeline of one rate step, pool of 50: at 3 calls/s 5 s warm-up, 25 s measured, 2 s drain; at 6 calls/s 5 s warm-up, 25 s measured, 41 s drain; then a cooldown of about 5 to 30 s">
+  <div class="phase-row"><span>Pool 50 at 3 calls/s<br><span class="note">keeping up</span></span>
+    <div class="phase-bar"><span class="ph-warm" style="flex:5">5 s</span><span class="ph-meas" style="flex:25">measured 25 s</span><span class="ph-drain" style="flex:2" title="drain 2 s"></span><span class="ph-cool" style="flex:15">cooldown</span><span style="flex:39"></span></div></div>
+  <div class="phase-row"><span>Pool 50 at 6 calls/s<br><span class="note">saturated</span></span>
+    <div class="phase-bar"><span class="ph-warm" style="flex:5">5 s</span><span class="ph-meas" style="flex:25">measured 25 s</span><span class="ph-drain" style="flex:41">drain 41 s</span><span class="ph-cool" style="flex:15">cooldown</span></div></div>
+  <div class="legend"><span><i style="border-top:8px solid var(--grid)"></i>warm-up (not measured)</span><span><i style="border-top:8px solid var(--muted)"></i>measured arrivals</span><span><i style="border-top:8px solid var(--band)"></i>drain: calls in flight finish</span><span><i class="dash" style="border-top-color:var(--rule)"></i>cooldown and copy-back, ~5–30 s</span></div>
+</div>
+<div class="table-scroll"><table>
+  <thead><tr><th>Sweep</th><th class="n">Arrivals</th><th>Drain (by offered rate)</th><th class="n">Wall clock per step</th><th class="n">Whole sweep</th></tr></thead>
+  <tbody>
+    <tr><td>SandboxManager</td><td class="n">15 + 60 s</td><td>1–11 s up to 2/s; 17 s at 3/s, 26 s at 4/s, 24 s at 6/s (stop rule ended arrivals at 29 s)</td><td class="n">81–95 s, then 963 s and 1025 s</td><td class="n">45 min</td></tr>
+    <tr><td>agent-sandbox, cold start</td><td class="n">5 + 25 s</td><td>1 s up to 1/s; 16 s at 2–3/s, 27 s at 4–6/s</td><td class="n">36–64 s</td><td class="n">~5 min</td></tr>
+    <tr><td>agent-sandbox, pool 32</td><td class="n">5 + 25 s</td><td>0–1 s up to 2/s; 15 s at 3/s, 24 s at 4/s, 34 s at 6/s</td><td class="n">36–70 s</td><td class="n">~6 min</td></tr>
+    <tr><td>agent-sandbox, pool 50</td><td class="n">5 + 25 s</td><td>0–2 s up to 3/s; 30 s at 4/s, 41 s at 6/s</td><td class="n">36–77 s</td><td class="n">~6 min</td></tr>
+  </tbody>
+</table></div>
+<ul>
+  <li><b>Measured windows include the drain.</b> Delivered calls/s divides completed calls by the time from the first measured call to the last release, so at saturating rates a 25 s cell reports a 48–66 s window.</li>
+  <li><b>The long SandboxManager steps are cooldown.</b> After the 3 and 4 calls/s cells, the harness waited 16–17 minutes for that rate's sandbox pods to finish terminating before starting the next rate.</li>
+  <li><b>A 30 s step is about as long as a 50-sandbox pool lasts.</b> In longer runs (next panel) pool 50 was empty after ~32 s at 3 calls/s and ~27 s at 4 calls/s, because refills start slowly and average only ~2.5/s under churn. A 30 s step ends right around that point, so the sweep shows the pool at its best. At 3 calls/s the refills nearly keep up even once it's empty (94% of calls still pooled over 150 s); at 4 calls/s they don't (74%, acquire p95 17 s).</li>
+</ul>
+</section>
+  <section class="panel"><h2>How fast the warm pool refills</h2>
+<p class="read">Measured separately from the sweeps, on the same cluster, with a pool of 50 polled about once a second. Refill rate is sandboxes the pool gained per second: calls served from the pool plus the change in ready sandboxes, in 10 s bins.</p>
+<div class="table-scroll"><table>
+  <thead><tr><th>Experiment</th><th class="n">Refill rate</th><th>Pool</th><th>Calls served from the pool</th><th>Back to 50</th></tr></thead>
+  <tbody>
+    <tr><td>Fill 0 → 50, quiet cluster</td><td class="n">~13/s</td><td>full in 3.8 s</td><td>–</td><td>–</td></tr>
+    <tr><td>Claim all 50 at once</td><td class="n">~5/s</td><td>lowest 19 ready</td><td>–</td><td>9 s after the burst</td></tr>
+    <tr><td>3 calls/s for 150 s</td><td class="n">2.5/s (10 s bins 0.9–3.9)</td><td>empty at 32 s</td><td>94% pooled · acquire p50 0.09 s, p95 0.57 s</td><td>32 s after arrivals stop</td></tr><tr><td>4 calls/s for 89 s</td><td class="n">2.5/s (10 s bins 0.3–4.5)</td><td>empty at 27 s</td><td>74% pooled · acquire p50 0.24 s, p95 17.02 s</td><td>29 s after arrivals stop</td></tr>
+  </tbody>
+</table></div>
+<div class="grid2">
+  <div><h3 class="sub">Ready sandboxes in the pool (5 s means)</h3><div class="chart" id="c-pool-level"></div><div class="legend" id="l-pool-level"></div></div>
+  <div><h3 class="sub">Refill rate (10 s bins)</h3><div class="chart" id="c-refill"></div><div class="legend" id="l-refill"></div></div>
+</div>
+<ul>
+  <li><b>Refill is fast until IPs run out.</b> On a quiet cluster the pool fills at ~13 sandboxes/s, and one 50-call burst is replaced within seconds. Under sustained churn it averages ~2.5/s, with dips every ~30 s: each deleted pod's IP is held 30 s before reuse, so new pods wait in Pending for one.</li>
+  <li><b>The pool empties fast, then runs near zero.</b> At 3 calls/s it was empty by 32 s, but refills nearly match the arrival rate, so most calls still got a pooled sandbox. At 4 calls/s the gap is too wide and acquires fall back to cold starts.</li>
+  <li><b>Recovery takes ~30 s</b> after the load stops: the same IP hold, playing out once more.</li>
+</ul>
+<script>
+const REFILL = [{"rate": 3.0, "dur": 150, "level": [{"x": 2.5, "v": 48.8, "pend": 3}, {"x": 7.5, "v": 46.2, "pend": 9}, {"x": 12.5, "v": 33.2, "pend": 19}, {"x": 17.5, "v": 30.0, "pend": 21}, {"x": 22.5, "v": 20.0, "pend": 35}, {"x": 27.5, "v": 10.0, "pend": 46}, {"x": 32.5, "v": 0.5, "pend": 50}, {"x": 37.5, "v": 3.7, "pend": 48}, {"x": 42.5, "v": 11.2, "pend": 39}, {"x": 47.5, "v": 12.2, "pend": 37}, {"x": 52.5, "v": 15.0, "pend": 36}, {"x": 57.5, "v": 13.0, "pend": 38}, {"x": 62.5, "v": 8.2, "pend": 48}, {"x": 67.5, "v": 0.8, "pend": 50}, {"x": 72.5, "v": 0.3, "pend": 50}, {"x": 77.5, "v": 7.8, "pend": 42}, {"x": 82.5, "v": 15.6, "pend": 37}, {"x": 87.5, "v": 16.2, "pend": 37}, {"x": 92.5, "v": 11.8, "pend": 42}, {"x": 97.5, "v": 2.0, "pend": 50}, {"x": 102.5, "v": 3.8, "pend": 49}, {"x": 107.5, "v": 2.3, "pend": 48}, {"x": 112.5, "v": 10.5, "pend": 43}, {"x": 117.5, "v": 13.8, "pend": 38}, {"x": 122.5, "v": 11.8, "pend": 39}, {"x": 127.5, "v": 13.0, "pend": 39}, {"x": 132.5, "v": 6.6, "pend": 45}, {"x": 137.5, "v": 6.0, "pend": 46}, {"x": 142.5, "v": 6.0, "pend": 44}, {"x": 147.5, "v": 9.2, "pend": 41}, {"x": 152.5, "v": 14.6, "pend": 40}, {"x": 157.5, "v": 25.0, "pend": 27}, {"x": 162.5, "v": 34.3, "pend": 15}, {"x": 167.5, "v": 41.8, "pend": 12}, {"x": 172.5, "v": 45.6, "pend": 5}, {"x": 177.5, "v": 48.0, "pend": 2}, {"x": 182.5, "v": 49.8, "pend": 0}, {"x": 187.5, "v": 50.0, "pend": 0}, {"x": 192.5, "v": 50.0, "pend": 0}, {"x": 197.5, "v": 50.0, "pend": 0}, {"x": 202.5, "v": 50.0, "pend": 0}], "refill": [{"x": 5, "v": 2.6, "pooled": 34}, {"x": 15, "v": 1.9, "pooled": 32}, {"x": 25, "v": 0.9, "pooled": 32}, {"x": 35, "v": 2.3, "pooled": 24}, {"x": 45, "v": 3.9, "pooled": 30}, {"x": 55, "v": 2.3, "pooled": 26}, {"x": 65, "v": 1.4, "pooled": 24}, {"x": 75, "v": 3.9, "pooled": 26}, {"x": 85, "v": 2.8, "pooled": 28}, {"x": 95, "v": 1.1, "pooled": 25}, {"x": 105, "v": 3.6, "pooled": 32}, {"x": 115, "v": 3.2, "pooled": 24}, {"x": 125, "v": 3.2, "pooled": 32}, {"x": 135, "v": 2.1, "pooled": 25}, {"x": 145, "v": 2.6, "pooled": 26}, {"x": 155, "v": 2.2, "pooled": 0}, {"x": 165, "v": 1.4, "pooled": 0}, {"x": 175, "v": 0.5, "pooled": 0}, {"x": 185, "v": 0.1, "pooled": 0}, {"x": 195, "v": 0.0, "pooled": 0}]}, {"rate": 4.0, "dur": 89, "level": [{"x": 2.5, "v": 46.5, "pend": 5}, {"x": 7.5, "v": 41.6, "pend": 14}, {"x": 12.5, "v": 40.0, "pend": 16}, {"x": 17.5, "v": 26.8, "pend": 25}, {"x": 22.5, "v": 19.6, "pend": 40}, {"x": 27.5, "v": 1.5, "pend": 51}, {"x": 32.5, "v": 0.0, "pend": 60}, {"x": 37.5, "v": 1.8, "pend": 61}, {"x": 42.5, "v": 11.0, "pend": 52}, {"x": 47.5, "v": 10.3, "pend": 52}, {"x": 52.5, "v": 10.2, "pend": 48}, {"x": 57.5, "v": 4.0, "pend": 55}, {"x": 62.5, "v": 0.0, "pend": 60}, {"x": 67.5, "v": 0.0, "pend": 64}, {"x": 72.5, "v": 2.0, "pend": 61}, {"x": 77.5, "v": 1.5, "pend": 63}, {"x": 82.5, "v": 7.7, "pend": 55}, {"x": 87.5, "v": 8.5, "pend": 50}, {"x": 92.5, "v": 15.5, "pend": 40}, {"x": 97.5, "v": 16.8, "pend": 37}, {"x": 102.5, "v": 23.8, "pend": 28}, {"x": 107.5, "v": 32.2, "pend": 21}, {"x": 112.5, "v": 45.2, "pend": 9}, {"x": 117.5, "v": 49.2, "pend": 1}, {"x": 122.5, "v": 50.0, "pend": 0}, {"x": 127.5, "v": 50.0, "pend": 0}, {"x": 132.5, "v": 50.0, "pend": 0}, {"x": 137.5, "v": 50.0, "pend": 0}, {"x": 142.5, "v": 50.0, "pend": 0}], "refill": [{"x": 5, "v": 3.4, "pooled": 43}, {"x": 15, "v": 2.9, "pooled": 43}, {"x": 25, "v": 1.0, "pooled": 35}, {"x": 35, "v": 1.3, "pooled": 7}, {"x": 45, "v": 4.5, "pooled": 36}, {"x": 55, "v": 2.7, "pooled": 42}, {"x": 65, "v": 0.3, "pooled": 3}, {"x": 75, "v": 3.1, "pooled": 28}, {"x": 85, "v": 4.4, "pooled": 33}, {"x": 95, "v": 0.3, "pooled": 0}, {"x": 105, "v": 2.2, "pooled": 0}, {"x": 115, "v": 1.1, "pooled": 0}, {"x": 125, "v": 0.0, "pooled": 0}, {"x": 135, "v": 0.0, "pooled": 0}]}];
+window.addEventListener("DOMContentLoaded", () => {
+  const series = key => REFILL.map((r, i) => ({ src: "agent-sandbox-pool50", dash: i > 0, name: `pool 50, ${r.rate} calls/s for ${r.dur} s`, rows: r[key], run: r }));
+  const xMax = Math.ceil(Math.max(...REFILL.flatMap(r => r.level.map(p => p.x))) / 30) * 30;
+  const xs = Array.from({ length: xMax / 30 + 1 }, (_, i) => i * 30);
+  const stops = (f, yTop) => REFILL.forEach(r => {
+    f.svg.append(el("path", { class: "ref", d: `M${f.x(r.dur)} ${f.y(0)} L${f.x(r.dur)} ${f.y(yTop)}` }));
+    f.svg.append(el("text", { class: "reft", x: f.x(r.dur) + 4, y: f.y(yTop) + 10 }, `${r.rate}/s stops`));
+  });
+  let f = frame("c-pool-level", { xs, xLabel: "seconds from first arrival", yMax: 50, yLabel: "ready in pool", yTicks: [0, 10, 20, 30, 40, 50] });
+  stops(f, 50);
+  lines(f, series("level"), p => p.v, p => `${p.x - 2.5}–${p.x + 2.5} s`, p => [["ready (mean)", fmt(p.v)], ["pods pending (max)", String(p.pend)]]);
+  legend("l-pool-level", series("level"));
+  const yMax = niceMax(Math.max(...REFILL.flatMap(r => r.refill.map(p => p.v)), 4));
+  f = frame("c-refill", { xs, xLabel: "seconds from first arrival", yMax, yLabel: "sandboxes / s", yTicks: ticks(yMax) });
+  stops(f, yMax);
+  lines(f, series("refill"), p => p.v, p => `${p.x - 5}–${p.x + 5} s`, p => [["refill", fmt(p.v) + "/s"], ["served from pool", String(p.pooled)]]);
+  legend("l-refill", series("refill"));
+});
+</script>
+</section>
+  <section class="panel"><h2>Reading it</h2><ul><li>Every arm falls below 50% at 6 calls/s, and none delivers more than ~2.3–2.8 calls/s once its pool (if any) is spent: the cluster&#x27;s pod-IP turnover caps every arm that creates a sandbox per call.</li><li>A deeper pool holds the line longer. Pool 50 keeps pace through 3 calls/s (3.22/s delivered, acquire p95 0.34 s); pool 32 keeps pace at 2 calls/s but drops to 72% at 3; cold start is already at 68% at 2 calls/s, SandboxManager at 92%. Past that point each pool drains faster than the controller refills it, and acquires wait like a cold start (p95 17–33 s).</li><li>Under sustained churn a pool refills at ~2.5 sandboxes/s, the same ceiling every arm hits, so a pool buys time, not sustained throughput: pool 50 lasted ~30 s at 3–4 calls/s (see the refill panel).</li><li>Latency degrades long before errors appear: acquire p95 reaches 15–33 s while errors stay at zero. Errors only show at 6 calls/s, as arrivals dropped at the in-flight cap (6 for SandboxManager, 5 for agent-sandbox cold start). Only the SandboxManager cell crossed the 5% stop rule, ending ~14 s into its measurement.</li><li>Delivered rate is completed calls over the time from the first measured call to the last release. At low rates a 25 s cell holds only 11–31 calls, so Poisson variance pushes delivered above offered (up to 131% at 1 call/s); at high rates the window runs past the cell&#x27;s duration while the backlog drains.</li></ul></section>
+  <section style="display:grid;gap:12px">
+    <h2>Every cell</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Cell</th><th>Test</th><th class="n">Pool</th><th class="n">Calls</th><th class="n">Errors</th><th class="n">Calls/s</th><th class="n">Acquire p50</th><th class="n">Acquire p95</th><th class="n">E2E p50</th><th class="n">E2E p95</th><th>Stopped</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <p class="note">Source: 2026-10-22_small_minimal-runtime_sustained-load/summary.tsv. Times in seconds. "Test" is what the cell ran: in words, then the harness command (run inside the loadgen pod by <code>harness/run-matrix.sh</code>, which first fills or drains the warm pool to the cell's depth). "Stopped": a stop rule ended the cell early (hover for the reason).</p>
+  </section>
+</div>
+<script>
+const RUNS = [{"label": "", "dash": false, "rows": [{"cell": "open-loop_sandboxmanager_r0.5", "mode": "open-loop", "src": "sandboxmanager", "x": 0.5, "pool": 0, "calls": 39, "errors": 0, "cps": 0.68, "acq50": 1.053, "acq95": 1.097, "e2e50": 1.454, "e2e95": 1.596, "stopped": "", "test": "Open loop: Poisson arrivals at 0.5 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 0.5 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_sandboxmanager_r1", "mode": "open-loop", "src": "sandboxmanager", "x": 1.0, "pool": 0, "calls": 70, "errors": 0, "cps": 1.02, "acq50": 1.055, "acq95": 15.351, "e2e50": 1.466, "e2e95": 15.731, "stopped": "", "test": "Open loop: Poisson arrivals at 1 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 1 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_sandboxmanager_r2", "mode": "open-loop", "src": "sandboxmanager", "x": 2.0, "pool": 0, "calls": 125, "errors": 0, "cps": 1.84, "acq50": 1.056, "acq95": 24.615, "e2e50": 1.492, "e2e95": 24.893, "stopped": "", "test": "Open loop: Poisson arrivals at 2 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 2 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_sandboxmanager_r3", "mode": "open-loop", "src": "sandboxmanager", "x": 3.0, "pool": 0, "calls": 179, "errors": 0, "cps": 2.38, "acq50": 1.073, "acq95": 27.139, "e2e50": 1.553, "e2e95": 27.51, "stopped": "", "test": "Open loop: Poisson arrivals at 3 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 3 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_sandboxmanager_r4", "mode": "open-loop", "src": "sandboxmanager", "x": 4.0, "pool": 0, "calls": 243, "errors": 0, "cps": 2.84, "acq50": 1.247, "acq95": 30.023, "e2e50": 1.805, "e2e95": 30.614, "stopped": "", "test": "Open loop: Poisson arrivals at 4 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 4 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_sandboxmanager_r6", "mode": "open-loop", "src": "sandboxmanager", "x": 6.0, "pool": 0, "calls": 82, "errors": 6, "cps": 2.03, "acq50": 14.552, "acq95": 29.078, "e2e50": 14.928, "e2e95": 29.569, "stopped": "proc 0: error rate 6/116 in last 30s", "test": "Open loop: Poisson arrivals at 6 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 6 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r0.5", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 0.5, "pool": 0, "calls": 11, "errors": 0, "cps": 0.52, "acq50": 0.445, "acq95": 1.41, "e2e50": 0.854, "e2e95": 1.704, "stopped": "", "test": "Open loop: Poisson arrivals at 0.5 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 0.5 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r1", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 1.0, "pool": 0, "calls": 31, "errors": 0, "cps": 1.29, "acq50": 0.456, "acq95": 1.555, "e2e50": 0.79, "e2e95": 1.819, "stopped": "", "test": "Open loop: Poisson arrivals at 1 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 1 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r2", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 2.0, "pool": 0, "calls": 55, "errors": 0, "cps": 1.36, "acq50": 0.511, "acq95": 15.294, "e2e50": 0.863, "e2e95": 15.625, "stopped": "", "test": "Open loop: Poisson arrivals at 2 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 2 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r3", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 3.0, "pool": 0, "calls": 84, "errors": 0, "cps": 2.12, "acq50": 0.616, "acq95": 25.653, "e2e50": 0.978, "e2e95": 25.851, "stopped": "", "test": "Open loop: Poisson arrivals at 3 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 3 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r4", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 4.0, "pool": 0, "calls": 112, "errors": 0, "cps": 2.18, "acq50": 1.214, "acq95": 27.489, "e2e50": 1.583, "e2e95": 27.81, "stopped": "", "test": "Open loop: Poisson arrivals at 4 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 4 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r6", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 6.0, "pool": 0, "calls": 152, "errors": 5, "cps": 2.82, "acq50": 1.369, "acq95": 29.587, "e2e50": 1.737, "e2e95": 29.977, "stopped": "", "test": "Open loop: Poisson arrivals at 6 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 6 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool32_r0.5", "mode": "open-loop", "src": "agent-sandbox-pool32", "x": 0.5, "pool": 32, "calls": 11, "errors": 0, "cps": 0.53, "acq50": 0.05, "acq95": 0.073, "e2e50": 0.379, "e2e95": 0.607, "stopped": "", "test": "Open loop: Poisson arrivals at 0.5 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 0.5 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool32_r1", "mode": "open-loop", "src": "agent-sandbox-pool32", "x": 1.0, "pool": 32, "calls": 31, "errors": 0, "cps": 1.31, "acq50": 0.053, "acq95": 0.104, "e2e50": 0.384, "e2e95": 0.55, "stopped": "", "test": "Open loop: Poisson arrivals at 1 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 1 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool32_r2", "mode": "open-loop", "src": "agent-sandbox-pool32", "x": 2.0, "pool": 32, "calls": 55, "errors": 0, "cps": 2.19, "acq50": 0.058, "acq95": 0.109, "e2e50": 0.408, "e2e95": 0.552, "stopped": "", "test": "Open loop: Poisson arrivals at 2 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 2 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool32_r3", "mode": "open-loop", "src": "agent-sandbox-pool32", "x": 3.0, "pool": 32, "calls": 84, "errors": 0, "cps": 2.16, "acq50": 0.084, "acq95": 2.145, "e2e50": 0.476, "e2e95": 2.487, "stopped": "", "test": "Open loop: Poisson arrivals at 3 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 3 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool32_r4", "mode": "open-loop", "src": "agent-sandbox-pool32", "x": 4.0, "pool": 32, "calls": 112, "errors": 0, "cps": 2.32, "acq50": 0.191, "acq95": 25.351, "e2e50": 0.606, "e2e95": 25.619, "stopped": "", "test": "Open loop: Poisson arrivals at 4 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 4 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool32_r6", "mode": "open-loop", "src": "agent-sandbox-pool32", "x": 6.0, "pool": 32, "calls": 152, "errors": 0, "cps": 2.58, "acq50": 2.3, "acq95": 29.343, "e2e50": 2.594, "e2e95": 29.597, "stopped": "", "test": "Open loop: Poisson arrivals at 6 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 6 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool50_r0.5", "mode": "open-loop", "src": "agent-sandbox-pool50", "x": 0.5, "pool": 50, "calls": 11, "errors": 0, "cps": 0.53, "acq50": 0.055, "acq95": 0.117, "e2e50": 0.383, "e2e95": 0.611, "stopped": "", "test": "Open loop: Poisson arrivals at 0.5 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 50 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 0.5 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool50_r1", "mode": "open-loop", "src": "agent-sandbox-pool50", "x": 1.0, "pool": 50, "calls": 31, "errors": 0, "cps": 1.31, "acq50": 0.059, "acq95": 0.171, "e2e50": 0.442, "e2e95": 0.563, "stopped": "", "test": "Open loop: Poisson arrivals at 1 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 50 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 1 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool50_r2", "mode": "open-loop", "src": "agent-sandbox-pool50", "x": 2.0, "pool": 50, "calls": 55, "errors": 0, "cps": 2.19, "acq50": 0.071, "acq95": 0.243, "e2e50": 0.439, "e2e95": 0.686, "stopped": "", "test": "Open loop: Poisson arrivals at 2 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 50 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 2 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool50_r3", "mode": "open-loop", "src": "agent-sandbox-pool50", "x": 3.0, "pool": 50, "calls": 84, "errors": 0, "cps": 3.22, "acq50": 0.072, "acq95": 0.342, "e2e50": 0.45, "e2e95": 0.777, "stopped": "", "test": "Open loop: Poisson arrivals at 3 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 50 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 3 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool50_r4", "mode": "open-loop", "src": "agent-sandbox-pool50", "x": 4.0, "pool": 50, "calls": 112, "errors": 0, "cps": 2.03, "acq50": 0.238, "acq95": 16.577, "e2e50": 0.641, "e2e95": 16.955, "stopped": "", "test": "Open loop: Poisson arrivals at 4 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 50 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 4 --duration 25 --warmup 5 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-pool50_r6", "mode": "open-loop", "src": "agent-sandbox-pool50", "x": 6.0, "pool": 50, "calls": 152, "errors": 0, "cps": 2.31, "acq50": 1.796, "acq95": 32.811, "e2e50": 2.2, "e2e95": 33.232, "stopped": "", "test": "Open loop: Poisson arrivals at 6 calls/s, at most 64 in flight; 25 s measured after a 5 s warm-up; warm pool filled to 50 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 6 --duration 25 --warmup 5 --max-inflight 64"}]}];
+
+const NAMES = {"sandboxmanager": "SandboxManager", "agent-sandbox-cold": "agent-sandbox, cold start",
+  "agent-sandbox-pool50": "agent-sandbox, pool 50", "agent-sandbox-pool32": "agent-sandbox, pool 32", "agent-sandbox-pool16": "agent-sandbox, pool 16",
+  "agent-sandbox-pool8": "agent-sandbox, pool 8", "reuse": "agent-sandbox, reused"};
+const ORDER = Object.keys(NAMES);
+const color = src => `var(--s-${src})`;
+const NS = "http://www.w3.org/2000/svg";
+const el = (n, a = {}, t) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); if (t != null) e.textContent = t; return e; };
+const fmt = v => v == null ? "–" : (Math.round(v * 100) / 100).toString();
+const cells = (run, mode, src) => run.rows.filter(r => r.mode === mode && r.src === src).sort((a, b) => a.x - b.x);
+const name = (src, run) => NAMES[src] + (RUNS.length > 1 ? ` · ${run.label}` : "");
+
+function tipLines(title, pairs, test) {
+  const b = document.createElement("b"); b.textContent = title; const out = [b];
+  for (const [k, v] of pairs) { const d = document.createElement("div"); const m = document.createElement("span"); m.className = "m"; m.textContent = v; d.append(k + ": ", m); out.push(d); }
+  if (test) { const d = document.createElement("div"); d.className = "tt"; d.textContent = test; out.push(d); }
+  return out;
+}
+function frame(id, { xs, xLabel, yMax, yLabel, yTicks, logX, H = 260 }) {
+  const host = document.getElementById(id);
+  const W = 520, M = { l: 48, r: 16, t: 14, b: 40 }, iw = W - M.l - M.r, ih = H - M.t - M.b;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  const lx = v => logX ? Math.log2(v) : v, x0 = lx(xs[0]), x1 = lx(xs[xs.length - 1]);
+  const x = v => M.l + ((lx(v) - x0) / ((x1 - x0) || 1)) * iw, y = v => M.t + ih - (v / yMax) * ih;
+  for (const t of yTicks) { svg.append(el("line", { class: "gl", x1: M.l, x2: W - M.r, y1: y(t), y2: y(t) })); svg.append(el("text", { class: "ax", x: M.l - 8, y: y(t) + 4, "text-anchor": "end" }, String(t))); }
+  svg.append(el("line", { class: "base", x1: M.l, x2: W - M.r, y1: y(0), y2: y(0) }));
+  for (const v of xs) svg.append(el("text", { class: "ax", x: x(v), y: H - M.b + 16, "text-anchor": "middle" }, String(v)));
+  svg.append(el("text", { class: "axt", x: M.l + iw / 2, y: H - 6, "text-anchor": "middle" }, xLabel));
+  svg.append(el("text", { class: "axt", x: 12, y: M.t + ih / 2, transform: `rotate(-90 12 ${M.t + ih / 2})`, "text-anchor": "middle" }, yLabel));
+  host.append(svg);
+  const tip = document.createElement("div"); tip.className = "tip"; host.append(tip);
+  const show = (e, lines) => { tip.replaceChildren(...lines); tip.style.display = "block"; const r = host.getBoundingClientRect(), tw = tip.offsetWidth;
+    let left = e.clientX - r.left + 12; if (left + tw > r.width) left = e.clientX - r.left - tw - 12; tip.style.left = Math.max(0, left) + "px"; tip.style.top = (e.clientY - r.top - 10) + "px"; };
+  return { svg, x, y, M, W, H, iw, show, hide: () => { tip.style.display = "none"; } };
+}
+function lines(f, series, val, xName, pairs) {
+  for (const s of series) {
+    const pts = s.rows.filter(r => val(r) != null).map(r => [f.x(r.x), f.y(val(r)), r]);
+    if (!pts.length) continue;
+    f.svg.append(el("path", { d: pts.map((p, i) => (i ? "L" : "M") + p[0] + " " + p[1]).join(" "), fill: "none", stroke: color(s.src), "stroke-width": 2, "stroke-dasharray": s.dash ? "6 4" : "none" }));
+    for (const [px, py, r] of pts) {
+      f.svg.append(el("circle", { cx: px, cy: py, r: 4, fill: s.dash ? "var(--panel)" : color(s.src), stroke: s.dash ? color(s.src) : "var(--panel)", "stroke-width": 2 }));
+      const hit = el("circle", { cx: px, cy: py, r: 11, fill: "transparent" });
+      hit.addEventListener("mousemove", e => f.show(e, tipLines(`${s.name} · ${xName(r)}`, pairs ? pairs(r) : [["calls/s", fmt(r.cps)], ["acquire p50", fmt(r.acq50) + " s"], ["e2e p95", fmt(r.e2e95) + " s"]], r.test)));
+      hit.addEventListener("mouseleave", f.hide); f.svg.append(hit);
+    }
+  }
+}
+function legend(id, series) {
+  const box = document.getElementById(id);
+  for (const s of series) { const sp = document.createElement("span"); const i = document.createElement("i"); i.style.borderTopColor = color(s.src); if (s.dash) i.className = "dash"; sp.append(i, s.name); box.append(sp); }
+}
+function seriesFor(mode, srcs) {
+  const out = [];
+  for (const run of RUNS) for (const src of srcs) { const rows = cells(run, mode, src); if (rows.length) out.push({ src, rows, dash: run.dash, name: name(src, run) }); }
+  return out;
+}
+const niceMax = v => { const s = [1, 2, 2.5, 3, 5, 10, 12, 15, 20, 25, 30, 40, 50, 60, 80, 100, 110, 150, 200]; return s.find(x => x >= v * 1.05) || Math.ceil(v * 1.1); };
+const ticks = m => { const step = m <= 3 ? 1 : m <= 12 ? 2 : m <= 30 ? 5 : m <= 60 ? 10 : m <= 120 ? 25 : 50; const t = []; for (let v = 0; v <= m + 1e-9; v += step) t.push(+v.toFixed(2)); return t; };
+function hidePanel(id) { document.getElementById(id).closest(".panel").hidden = true; }
+
+function closedChart(id, legendId, val, yLabel, srcs, band) {
+  const series = seriesFor("closed-loop", srcs);
+  if (!series.length) return hidePanel(id);
+  const xs = [...new Set(series.flatMap(s => s.rows.map(r => r.x)))].sort((a, b) => a - b);
+  const yMax = niceMax(Math.max(...series.flatMap(s => s.rows.map(val)).filter(v => v != null), band ? 2.5 : 0));
+  const f = frame(id, { xs, logX: true, xLabel: "workers (log scale)", yMax, yLabel, yTicks: ticks(yMax) });
+  if (band) { f.svg.insertBefore(el("rect", { class: "band", x: f.M.l, width: f.iw, y: f.y(2.5), height: f.y(2) - f.y(2.5) }), f.svg.firstChild); f.svg.append(el("text", { class: "bandt", x: f.M.l + 6, y: f.y(2.5) - 5 }, "observed cluster ceiling ~2–2.5/s")); }
+  lines(f, series, val, r => `${r.x} workers`);
+  legend(legendId, series);
+}
+function reuseChart(id) {
+  const series = seriesFor("closed-loop", ["reuse"]);
+  if (!series.length) return hidePanel(id);
+  const xs = series[0].rows.map(r => r.x), yMax = niceMax(Math.max(...xs.map(w => w / 0.3)));
+  const f = frame(id, { xs, logX: true, xLabel: "workers (log scale)", yMax, yLabel: "tool calls / s", yTicks: ticks(yMax) });
+  f.svg.append(el("path", { class: "ref", d: xs.map((w, i) => (i ? "L" : "M") + f.x(w) + " " + f.y(w / 0.3)).join(" ") }));
+  lines(f, series, r => r.cps, r => `${r.x} workers`);
+}
+function burstChart(id) {
+  const bars = [];
+  for (const run of RUNS) for (const r of run.rows.filter(r => r.mode === "burst").sort((a, b) => ORDER.indexOf(a.src) - ORDER.indexOf(b.src) || a.x - b.x))
+    bars.push({ r, run, label: `${r.x} calls · ${NAMES[r.src]}` + (RUNS.length > 1 ? ` · ${run.label}` : "") });
+  if (!bars.length) return hidePanel(id);
+  const host = document.getElementById(id), W = 520, rowH = 34, M = { l: 230, r: 64, t: 6, b: 30 }, H = M.t + bars.length * rowH + M.b;
+  const max = niceMax(Math.max(...bars.map(b => b.r.cps))), x = v => M.l + (v / max) * (W - M.l - M.r);
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  for (const t of ticks(max)) { svg.append(el("line", { class: "gl", x1: x(t), x2: x(t), y1: M.t, y2: H - M.b })); svg.append(el("text", { class: "ax", x: x(t), y: H - M.b + 16, "text-anchor": "middle" }, String(t))); }
+  svg.append(el("text", { class: "axt", x: x(max / 2), y: H - 2, "text-anchor": "middle" }, "tool calls / s"));
+  host.append(svg); const tip = document.createElement("div"); tip.className = "tip"; host.append(tip);
+  bars.forEach((b, i) => {
+    const yy = M.t + i * rowH + 7, r = b.r;
+    svg.append(el("text", { class: "axt", x: M.l - 10, y: yy + 13, "text-anchor": "end" }, b.label));
+    svg.append(el("rect", { x: M.l, y: yy, width: Math.max(4, x(r.cps) - M.l), height: 18, rx: 4, fill: b.run.dash ? "var(--panel)" : color(r.src), stroke: color(r.src), "stroke-width": b.run.dash ? 2 : 0, "stroke-dasharray": b.run.dash ? "5 3" : "none" }));
+    svg.append(el("text", { class: "lbl", x: x(r.cps) + 6, y: yy + 13 }, `${fmt(r.cps)}/s`));
+    const hit = el("rect", { x: 0, y: yy - 6, width: W, height: rowH - 4, fill: "transparent" });
+    hit.addEventListener("mousemove", e => { tip.replaceChildren(...tipLines(b.label, [["calls/s", fmt(r.cps)], ["acquire p50", fmt(r.acq50) + " s"], ["e2e p95", fmt(r.e2e95) + " s"]], r.test));
+      tip.style.display = "block"; const bb = host.getBoundingClientRect(); tip.style.left = Math.min(e.clientX - bb.left + 12, bb.width - tip.offsetWidth) + "px"; tip.style.top = (e.clientY - bb.top - 10) + "px"; });
+    hit.addEventListener("mouseleave", () => { tip.style.display = "none"; }); svg.append(hit);
+  });
+}
+function openChart(id, legendId) {
+  const series = seriesFor("open-loop", ORDER);
+  if (!series.length) return hidePanel(id);
+  const xMax = Math.max(...series.flatMap(s => s.rows.map(r => r.x))), yMax = niceMax(Math.max(xMax, ...series.flatMap(s => s.rows.map(r => r.cps)))), m = Math.max(xMax, yMax);
+  const xs = [...new Set(series.flatMap(s => s.rows.map(r => r.x)))].sort((a, b) => a - b);
+  const f = frame(id, { xs: [0, ...xs], xLabel: "offered rate (calls / s)", yMax, yLabel: "delivered (calls / s)", yTicks: ticks(yMax) });
+  f.svg.append(el("path", { class: "ref", d: `M${f.x(0)} ${f.y(0)} L${f.x(xMax)} ${f.y(Math.min(xMax, yMax))}` }));
+  f.svg.append(el("path", { class: "ref half", d: `M${f.x(0)} ${f.y(0)} L${f.x(xMax)} ${f.y(xMax / 2)}` }));
+  f.svg.append(el("text", { class: "reft", x: f.x(xMax) - 4, y: f.y(xMax / 2) + 14, "text-anchor": "end" }, "50% of offered"));
+  lines(f, series, r => r.cps, r => `offered ${r.x}/s`);
+  legend(legendId, series);
+}
+function errChart(id, legendId) {
+  const series = seriesFor("open-loop", ORDER).map(s => ({ ...s, rows: s.rows.map(r => ({ ...r, err: r.calls ? 100 * r.errors / r.calls : 0 })) }));
+  if (!series.length) return hidePanel(id);
+  const xs = [...new Set(series.flatMap(s => s.rows.map(r => r.x)))].sort((a, b) => a - b);
+  const yMax = niceMax(Math.max(6, ...series.flatMap(s => s.rows.map(r => r.err))));
+  const f = frame(id, { xs: [0, ...xs], xLabel: "offered rate (calls / s)", yMax, yLabel: "calls failed or dropped (%)", yTicks: ticks(yMax) });
+  f.svg.append(el("path", { class: "ref", d: `M${f.x(0)} ${f.y(5)} L${f.x(xs[xs.length - 1])} ${f.y(5)}` }));
+  f.svg.append(el("text", { class: "reft", x: f.M.l + 6, y: f.y(5) - 5 }, "stop rule: over 5% in the last 30 s"));
+  lines(f, series, r => r.err, r => `offered ${r.x}/s`, r => [["errors", `${r.errors} of ${r.calls} (${fmt(r.err)}%)`], ["delivered", fmt(r.cps) + "/s"]]);
+  legend(legendId, series);
+}
+function table(id) {
+  const tb = document.getElementById(id);
+  const head = tb.closest("table").querySelector("thead tr");
+  if (RUNS.length > 1) { const th = document.createElement("th"); th.textContent = "Run"; head.insertBefore(th, head.children[1]); }
+  for (const [title, mode] of [["Closed loop", "closed-loop"], ["Bursts", "burst"], ["Open loop (rate sweeps)", "open-loop"]]) {
+    const rows = RUNS.flatMap(run => run.rows.filter(r => r.mode === mode).map(r => [run, r]))
+      .sort((a, b) => ORDER.indexOf(a[1].src) - ORDER.indexOf(b[1].src) || a[1].x - b[1].x || RUNS.indexOf(a[0]) - RUNS.indexOf(b[0]));
+    if (!rows.length) continue;
+    const g = document.createElement("tr"); g.className = "group"; const gt = document.createElement("td"); gt.colSpan = RUNS.length > 1 ? 12 : 11; gt.textContent = title; g.append(gt); tb.append(g);
+    for (const [run, r] of rows) {
+      const tr = document.createElement("tr"), c = document.createElement("td"), sw = document.createElement("span");
+      sw.className = "sw"; sw.style.background = color(r.src); c.append(sw, r.cell); tr.append(c);
+      if (RUNS.length > 1) { const t = document.createElement("td"); t.textContent = run.label; tr.append(t); }
+      const tc = document.createElement("td"); tc.className = "test"; tc.append(r.test || "–");
+      if (r.cmd) { const code = document.createElement("code"); code.textContent = r.cmd; tc.append(code); }
+      tr.append(tc);
+      for (const v of [r.pool, r.calls, r.errors, fmt(r.cps), fmt(r.acq50), fmt(r.acq95), fmt(r.e2e50), fmt(r.e2e95)]) { const td = document.createElement("td"); td.className = "n"; td.textContent = String(v); tr.append(td); }
+      const st = document.createElement("td"); st.textContent = r.stopped ? "yes" : ""; st.title = r.stopped; tr.append(st);
+      tb.append(tr);
+    }
+  }
+}
+const CREATING = ORDER.filter(s => s !== "reuse");
+closedChart("c-throughput", "l-throughput", r => r.cps, "tool calls / s", CREATING, true);
+closedChart("c-acquire", "l-acquire", r => r.acq50, "acquire p50 (s)", CREATING, false);
+reuseChart("c-reuse");
+burstChart("c-burst");
+openChart("c-open", "l-open");
+errChart("c-err", "l-err");
+closedChart("c-tail", "l-tail", r => r.e2e95, "end-to-end p95 (s)", ["sandboxmanager", "agent-sandbox-cold"], false);
+table("rows");
+</script>

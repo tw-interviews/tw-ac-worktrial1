@@ -9,6 +9,7 @@
 # MAX_INFLIGHT bound each cell.
 
 API_REPLICAS=10
+SWEEP_FLOOR=0.5      # open-loop sweeps run until delivered < 50% of offered
 MAX_INFLIGHT=600
 
 grid_quick() {
@@ -32,9 +33,9 @@ grid_full() {
   burst agent-sandbox 0 512
   burst sandboxmanager 0 512
   burst agent-sandbox 512 2048        # the stress point: a burst four times the pool
-  open_sweep sandboxmanager 0 5 10 20 40 80 160
-  open_sweep agent-sandbox 0 5 10 20 40 80 160
-  open_sweep agent-sandbox 512 5 10 20 40 80 160
+  open_sweep sandboxmanager 0 5 10 20 40 80 160 320
+  open_sweep agent-sandbox 0 5 10 20 40 80 160 320
+  open_sweep agent-sandbox 512 5 10 20 40 80 160 320
 }
 
 grid_startup() {
@@ -44,6 +45,6 @@ grid_startup() {
   done
   burst agent-sandbox 0 512
   burst sandboxmanager 0 512
-  open_sweep sandboxmanager 0 5 10 20 40 80 160
-  open_sweep agent-sandbox 0 5 10 20 40 80 160
+  open_sweep sandboxmanager 0 5 10 20 40 80 160 320
+  open_sweep agent-sandbox 0 5 10 20 40 80 160 320
 }

@@ -15,20 +15,22 @@ A tool call is `sleep` for a duration drawn from N(300 ms, 75 ms), clamped to
 
 ## Results so far
 
-Small profile, 5 × c7i-flex.large on EKS 1.37, one run per cell, 0 errors. Full
-tables and charts: [`benchmark/results/`](benchmark/results/).
+Small profile, 5 × c7i-flex.large on EKS 1.37, one run per cell, 0 errors. Reports
+(open in a browser): [Python runtime](benchmark/results/2026-10-22_small_python-runtime/report.html),
+[minimal runtime](benchmark/results/2026-10-22_small_minimal-runtime/report.html),
+[side by side](benchmark/results/comparison_python-vs-minimal.html).
 
 - **The cluster's ceiling, ~2–2.5 calls/s, applied to every arm that creates a sandbox per
   call.** Those nodes were created before VPC CNI prefix delegation was enabled and run out of
   pod IPs under churn (a deleted pod's IP waits 30 s before reuse). The large profile, on fresh
   nodes, is where the designs will separate.
 - **Reuse scales linearly** (104 calls/s at 32 workers): creating sandboxes is the whole cost.
-- **Warm pools absorb bursts.** A pool of 32 served a 32-call burst at 13.45 calls/s with
-  0.67 s acquires; with no pool the same burst ran at 1.39 calls/s.
-- **"Ready" differs between the arms.** agent-sandbox waits for the in-sandbox runtime to
-  answer; SandboxManager only for the container to start, since it runs tools through exec.
-  With the ~440 MB Python runtime that made cold agent-sandbox acquires ~5.6 s against
-  ~1.05 s; the minimal runtime removes most of the difference.
+- **Warm pools absorb bursts.** A 32-call burst against a pool of 32 ran at 13.45 calls/s
+  (Python runtime) and 18.31 calls/s (minimal runtime); with no pool, 1.39 and 1.86.
+- **The runtime image decides agent-sandbox's cold start.** A sandbox counts as ready only once
+  its runtime answers. With the ~440 MB Python runtime, cold acquire at one worker was 5.62 s
+  (SandboxManager 1.05 s, which counts a running container as ready since it runs tools through
+  exec); with the ~10 MB minimal runtime it fell to 0.44 s, below SandboxManager.
 
 ## Layout
 

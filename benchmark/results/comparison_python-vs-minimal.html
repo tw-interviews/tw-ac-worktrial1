@@ -1,0 +1,279 @@
+<title>Tool-call benchmark: Python vs minimal runtime</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: a benchmark report. Headline figures, one panel per experiment (chart + one line of reading), every cell in a table. Series colors: the dataviz reference palette in fixed slot order, one color per sandbox source on every page. */
+  :root {
+    --bg: #f4f5f7; --panel: #fcfcfb; --ink: #0b0b0b; --muted: #52514e; --rule: #dcdfe5; --grid: #ebedf0;
+    --band: #fbefe2; --band-ink: #8f4a12;
+    --s-sandboxmanager: #2a78d6; --s-agent-sandbox-cold: #eb6834; --s-agent-sandbox-pool32: #1baf7a;
+    --s-agent-sandbox-pool16: #eda100; --s-agent-sandbox-pool8: #e87ba4; --s-reuse: #008300;
+    --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark; --bg: #121211; --panel: #1a1a19; --ink: #f0efec; --muted: #c3c2b7; --rule: #33332f; --grid: #2a2a27;
+      --band: #2e2216; --band-ink: #f3b77a;
+      --s-sandboxmanager: #3987e5; --s-agent-sandbox-cold: #d95926; --s-agent-sandbox-pool32: #199e70;
+      --s-agent-sandbox-pool16: #c98500; --s-agent-sandbox-pool8: #d55181; --s-reuse: #008300;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark; --bg: #121211; --panel: #1a1a19; --ink: #f0efec; --muted: #c3c2b7; --rule: #33332f; --grid: #2a2a27;
+    --band: #2e2216; --band-ink: #f3b77a;
+    --s-sandboxmanager: #3987e5; --s-agent-sandbox-cold: #d95926; --s-agent-sandbox-pool32: #199e70;
+    --s-agent-sandbox-pool16: #c98500; --s-agent-sandbox-pool8: #d55181; --s-reuse: #008300;
+  }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-size: 15px; line-height: 1.55; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding-block: 32px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: grid; gap: 28px; }
+  header { display: grid; gap: 8px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0; font-weight: 600; text-wrap: balance; }
+  h2 { font-size: 17px; line-height: 1.3; margin: 0; font-weight: 600; text-wrap: balance; }
+  p { margin: 0; max-width: 74ch; }
+  .lede { color: var(--muted); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .tile { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; display: grid; gap: 4px; align-content: start; }
+  .tile .k { font-size: 13px; color: var(--muted); }
+  .tile .v { font-family: var(--font-mono); font-size: 24px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .tile .s { font-size: 13px; color: var(--muted); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 16px; }
+  @media (max-width: 520px) { .grid2 { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+  .panel[hidden] { display: none; }
+  .read { font-size: 14px; color: var(--muted); }
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  svg text { font-family: var(--font-sans); }
+  .ax { fill: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+  .axt { fill: var(--muted); font-size: 11.5px; }
+  .gl { stroke: var(--grid); stroke-width: 1; }
+  .base { stroke: var(--rule); stroke-width: 1; }
+  .lbl { fill: var(--ink); font-size: 11.5px; font-family: var(--font-mono); }
+  .band { fill: var(--band); }
+  .bandt { fill: var(--band-ink); font-size: 11px; font-weight: 600; }
+  .ref { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 4; fill: none; }
+  .ref.half { stroke-dasharray: 1 4; }
+  .reft { fill: var(--muted); font-size: 11px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 16px; height: 0; border-top: 3px solid; display: inline-block; }
+  .legend i.dash { border-top-style: dashed; border-top-width: 2px; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--rule);
+    border-radius: 6px; padding: 6px 9px; font-size: 12.5px; box-shadow: 0 4px 14px rgb(0 0 0 / 0.12); white-space: nowrap; z-index: 2; display: none; }
+  .tip b { font-weight: 600; }
+  .tip .m { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .table-scroll { overflow-x: auto; background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; min-width: 820px; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+  td.n, th.n { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  th { font-size: 11.5px; font-weight: 500; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; background: var(--panel); }
+  tr.group td { font-weight: 600; background: var(--bg); }
+  tr:last-child td { border-bottom: 0; }
+  .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 8px; }
+  ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+  li { font-size: 14px; max-width: 82ch; }
+  .note { font-size: 13px; color: var(--muted); }
+  td.test { min-width: 280px; max-width: 420px; font-size: 13px; }
+  td.test code { display: block; margin-top: 4px; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+  .tip .tt { margin-top: 6px; max-width: 260px; color: var(--muted); font-size: 12px; white-space: normal; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">EKS 1.37 · 5 × c7i-flex.large · small profile · 2026-10-22 · 19 cells in both runs</div>
+    <h1>Tool-call benchmark: Python vs minimal runtime</h1>
+    <p class="lede">The same cells run twice: with the ~440 MB Python runtime (dashed lines, outlined bars) and with the ~10 MB minimal runtime (solid). Only the runtime image changed.</p>
+  </header>
+  <div class="tiles"><div class="tile"><span class="k">agent-sandbox cold acquire p50, 1 worker</span><span class="v">5.62 → 0.43 s</span><span class="s">Python runtime → minimal runtime</span></div><div class="tile"><span class="k">SandboxManager acquire p50, 1 worker</span><span class="v">1.05 → 1.05 s</span><span class="s">Python runtime → minimal runtime</span></div><div class="tile"><span class="k">32-call burst, pool of 32</span><span class="v">13.4 → 18.3/s</span><span class="s">Python runtime → minimal runtime</span></div><div class="tile"><span class="k">32-call burst, no pool</span><span class="v">1.4 → 1.9/s</span><span class="s">Python runtime → minimal runtime</span></div></div>
+  <div class="grid2">
+    <section class="panel"><h2>Tool calls per second as workers grow</h2><div class="chart" id="c-throughput"></div><div class="legend" id="l-throughput"></div>
+      <p class="read">One sandbox per call: every arm that creates sandboxes is capped by how fast the cluster turns pods over.</p></section>
+    <section class="panel"><h2>Time to get a sandbox (acquire p50)</h2><div class="chart" id="c-acquire"></div><div class="legend" id="l-acquire"></div>
+      <p class="read">How long a worker waits from asking for a sandbox until it can run a tool.</p></section>
+    <section class="panel"><h2>Reused sandboxes against the ideal</h2><div class="chart" id="c-reuse"></div>
+      <div class="legend"><span><i style="border-top-color:var(--s-reuse)"></i>agent-sandbox, reused</span><span><i class="dash" style="border-top-color:var(--muted)"></i>ideal: workers ÷ 0.3 s</span></div>
+      <p class="read">With nothing created per call, throughput tracks the ideal: creating sandboxes is the whole cost.</p></section>
+    <section class="panel"><h2>Bursts: N tool calls fired at once</h2><div class="chart" id="c-burst"></div>
+      <p class="read">How fast a fan-out of calls is absorbed in each run (outlined bars: Python runtime).</p></section>
+    <section class="panel"><h2>Sustained load: delivered vs offered rate</h2><div class="chart" id="c-open"></div><div class="legend" id="l-open"></div>
+      <p class="read">Each sweep raises the offered rate until delivered falls below 50% of it (sweeps run before that rule stopped at 90%, or at a stop rule).</p></section>
+    <section class="panel"><h2>Error rate as offered load rises</h2><div class="chart" id="c-err"></div><div class="legend" id="l-err"></div>
+      <p class="read">Failed calls plus arrivals dropped at the in-flight cap, as a share of the cell's calls. A cell stops issuing calls once 5% of the last 30 s failed, so this reads as "where the stop rule fired", not how high errors would climb.</p></section>
+    <section class="panel"><h2>Tail latency (end-to-end p95)</h2><div class="chart" id="c-tail"></div><div class="legend" id="l-tail"></div>
+      <p class="read">Long tails here are pod-IP retries on the test nodes, not tool time.</p></section>
+  </div>
+  <section class="panel"><h2>Reading it</h2><ul><li>The runtime&#x27;s startup time lands entirely in agent-sandbox&#x27;s acquire, because a sandbox only counts as ready once the runtime answers. Cold acquire at one worker: 5.62 s → 0.44 s.</li><li>SandboxManager barely changes (1.05 s either way): it never waits for the runtime.</li><li>Neither runtime moves the ~2–2.5 calls/s ceiling, which comes from pod IPs on these nodes, not from the sandboxes.</li></ul></section>
+  <section style="display:grid;gap:12px">
+    <h2>Every cell</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Cell</th><th>Test</th><th class="n">Pool</th><th class="n">Calls</th><th class="n">Errors</th><th class="n">Calls/s</th><th class="n">Acquire p50</th><th class="n">Acquire p95</th><th class="n">E2E p50</th><th class="n">E2E p95</th><th>Stopped</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <p class="note">Sources: 2026-10-22_small_python-runtime/summary.tsv (dashed) and 2026-10-22_small_minimal-runtime/summary.tsv (solid). Times in seconds. "Test" is what the cell ran: in words, then the harness command (run inside the loadgen pod by <code>harness/run-matrix.sh</code>, which first fills or drains the warm pool to the cell's depth). "Stopped": a stop rule ended the cell early (hover for the reason).</p>
+  </section>
+</div>
+<script>
+const RUNS = [{"label": "Python runtime", "dash": true, "rows": [{"cell": "closed-loop_sandboxmanager_w01", "mode": "closed-loop", "src": "sandboxmanager", "x": 1.0, "pool": 0, "calls": 38, "errors": 0, "cps": 0.63, "acq50": 1.048, "acq95": 1.115, "e2e50": 1.574, "e2e95": 1.859, "stopped": "", "test": "Closed loop: 1 worker, each starting its next call when the last ends; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode closed --workers 1 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-cold_w01", "mode": "closed-loop", "src": "agent-sandbox-cold", "x": 1.0, "pool": 0, "calls": 11, "errors": 0, "cps": 0.17, "acq50": 5.617, "acq95": 5.77, "e2e50": 5.912, "e2e95": 6.162, "stopped": "", "test": "Closed loop: 1 worker, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 1 --duration 60 --warmup 15"}, {"cell": "closed-loop_sandboxmanager_w04", "mode": "closed-loop", "src": "sandboxmanager", "x": 4.0, "pool": 0, "calls": 91, "errors": 0, "cps": 1.26, "acq50": 1.101, "acq95": 13.301, "e2e50": 1.794, "e2e95": 13.899, "stopped": "", "test": "Closed loop: 4 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode closed --workers 4 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-cold_w04", "mode": "closed-loop", "src": "agent-sandbox-cold", "x": 4.0, "pool": 0, "calls": 37, "errors": 0, "cps": 0.6, "acq50": 5.814, "acq95": 6.885, "e2e50": 6.19, "e2e95": 7.202, "stopped": "", "test": "Closed loop: 4 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 4 --duration 60 --warmup 15"}, {"cell": "closed-loop_sandboxmanager_w16", "mode": "closed-loop", "src": "sandboxmanager", "x": 16.0, "pool": 0, "calls": 122, "errors": 0, "cps": 1.65, "acq50": 2.077, "acq95": 28.797, "e2e50": 2.857, "e2e95": 29.73, "stopped": "", "test": "Closed loop: 16 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode closed --workers 16 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-cold_w16", "mode": "closed-loop", "src": "agent-sandbox-cold", "x": 16.0, "pool": 0, "calls": 104, "errors": 0, "cps": 1.55, "acq50": 7.399, "acq95": 19.817, "e2e50": 7.778, "e2e95": 20.272, "stopped": "", "test": "Closed loop: 16 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 16 --duration 60 --warmup 15"}, {"cell": "closed-loop_sandboxmanager_w32", "mode": "closed-loop", "src": "sandboxmanager", "x": 32.0, "pool": 0, "calls": 155, "errors": 0, "cps": 1.96, "acq50": 3.281, "acq95": 30.312, "e2e50": 4.3, "e2e95": 31.459, "stopped": "", "test": "Closed loop: 32 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode closed --workers 32 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-cold_w32", "mode": "closed-loop", "src": "agent-sandbox-cold", "x": 32.0, "pool": 0, "calls": 142, "errors": 0, "cps": 1.9, "acq50": 10.264, "acq95": 38.856, "e2e50": 10.584, "e2e95": 39.155, "stopped": "", "test": "Closed loop: 32 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 32 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-pool32_w04", "mode": "closed-loop", "src": "agent-sandbox-pool32", "x": 4.0, "pool": 32, "calls": 135, "errors": 0, "cps": 2.06, "acq50": 0.17, "acq95": 8.254, "e2e50": 0.575, "e2e95": 8.579, "stopped": "", "test": "Closed loop: 4 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 4 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-pool32_w16", "mode": "closed-loop", "src": "agent-sandbox-pool32", "x": 16.0, "pool": 32, "calls": 158, "errors": 0, "cps": 2.46, "acq50": 4.378, "acq95": 16.979, "e2e50": 4.775, "e2e95": 17.587, "stopped": "", "test": "Closed loop: 16 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 16 --duration 60 --warmup 15"}, {"cell": "burst_agent-sandbox-pool32_n32", "mode": "burst", "src": "agent-sandbox-pool32", "x": 32.0, "pool": 32, "calls": 32, "errors": 0, "cps": 13.45, "acq50": 0.669, "acq95": 1.547, "e2e50": 1.481, "e2e95": 2.333, "stopped": "", "test": "Burst: 32 calls started at once; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode burst --calls 32"}, {"cell": "burst_agent-sandbox-cold_n32", "mode": "burst", "src": "agent-sandbox-cold", "x": 32.0, "pool": 0, "calls": 32, "errors": 0, "cps": 1.39, "acq50": 10.632, "acq95": 21.66, "e2e50": 11.048, "e2e95": 22.072, "stopped": "", "test": "Burst: 32 calls started at once; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode burst --calls 32"}, {"cell": "burst_sandboxmanager_n32", "mode": "burst", "src": "sandboxmanager", "x": 32.0, "pool": 0, "calls": 32, "errors": 0, "cps": 5.78, "acq50": 2.877, "acq95": 4.501, "e2e50": 3.597, "e2e95": 5.342, "stopped": "", "test": "Burst: 32 calls started at once", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode burst --calls 32"}, {"cell": "open-loop_sandboxmanager_r0.5", "mode": "open-loop", "src": "sandboxmanager", "x": 0.5, "pool": 0, "calls": 39, "errors": 0, "cps": 0.68, "acq50": 1.054, "acq95": 1.101, "e2e50": 1.602, "e2e95": 1.738, "stopped": "", "test": "Open loop: Poisson arrivals at 0.5 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 0.5 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_sandboxmanager_r1", "mode": "open-loop", "src": "sandboxmanager", "x": 1.0, "pool": 0, "calls": 70, "errors": 0, "cps": 1.14, "acq50": 1.056, "acq95": 1.589, "e2e50": 1.633, "e2e95": 2.196, "stopped": "", "test": "Open loop: Poisson arrivals at 1 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 1 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_sandboxmanager_r2", "mode": "open-loop", "src": "sandboxmanager", "x": 2.0, "pool": 0, "calls": 125, "errors": 0, "cps": 1.71, "acq50": 1.092, "acq95": 15.406, "e2e50": 1.805, "e2e95": 16.239, "stopped": "", "test": "Open loop: Poisson arrivals at 2 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 2 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r0.5", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 0.5, "pool": 0, "calls": 39, "errors": 0, "cps": 0.63, "acq50": 6.592, "acq95": 7.792, "e2e50": 6.922, "e2e95": 8.131, "stopped": "", "test": "Open loop: Poisson arrivals at 0.5 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 0.5 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r1", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 1.0, "pool": 0, "calls": 70, "errors": 0, "cps": 1.09, "acq50": 6.675, "acq95": 9.413, "e2e50": 6.979, "e2e95": 9.768, "stopped": "", "test": "Open loop: Poisson arrivals at 1 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 1 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r2", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 2.0, "pool": 0, "calls": 125, "errors": 0, "cps": 1.71, "acq50": 8.634, "acq95": 27.78, "e2e50": 8.985, "e2e95": 28.212, "stopped": "", "test": "Open loop: Poisson arrivals at 2 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 2 --duration 60 --warmup 15 --max-inflight 64"}]}, {"label": "minimal runtime", "dash": false, "rows": [{"cell": "closed-loop_sandboxmanager_w01", "mode": "closed-loop", "src": "sandboxmanager", "x": 1.0, "pool": 0, "calls": 40, "errors": 0, "cps": 0.68, "acq50": 1.05, "acq95": 1.069, "e2e50": 1.485, "e2e95": 1.647, "stopped": "", "test": "Closed loop: 1 worker, each starting its next call when the last ends; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode closed --workers 1 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-cold_w01", "mode": "closed-loop", "src": "agent-sandbox-cold", "x": 1.0, "pool": 0, "calls": 42, "errors": 0, "cps": 0.68, "acq50": 0.435, "acq95": 2.466, "e2e50": 0.805, "e2e95": 2.723, "stopped": "", "test": "Closed loop: 1 worker, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 1 --duration 60 --warmup 15"}, {"cell": "closed-loop_sandboxmanager_w04", "mode": "closed-loop", "src": "sandboxmanager", "x": 4.0, "pool": 0, "calls": 39, "errors": 0, "cps": 0.57, "acq50": 1.061, "acq95": 28.757, "e2e50": 1.512, "e2e95": 29.075, "stopped": "", "test": "Closed loop: 4 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode closed --workers 4 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-cold_w04", "mode": "closed-loop", "src": "agent-sandbox-cold", "x": 4.0, "pool": 0, "calls": 60, "errors": 0, "cps": 1.09, "acq50": 0.548, "acq95": 15.166, "e2e50": 0.905, "e2e95": 15.538, "stopped": "", "test": "Closed loop: 4 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 4 --duration 60 --warmup 15"}, {"cell": "closed-loop_sandboxmanager_w16", "mode": "closed-loop", "src": "sandboxmanager", "x": 16.0, "pool": 0, "calls": 106, "errors": 0, "cps": 1.74, "acq50": 1.128, "acq95": 27.296, "e2e50": 1.637, "e2e95": 27.87, "stopped": "proc 0: a call in flight over 60s", "test": "Closed loop: 16 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode closed --workers 16 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-cold_w16", "mode": "closed-loop", "src": "agent-sandbox-cold", "x": 16.0, "pool": 0, "calls": 111, "errors": 0, "cps": 1.8, "acq50": 0.871, "acq95": 24.386, "e2e50": 1.32, "e2e95": 24.662, "stopped": "proc 0: a call in flight over 60s", "test": "Closed loop: 16 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 16 --duration 60 --warmup 15"}, {"cell": "closed-loop_sandboxmanager_w32", "mode": "closed-loop", "src": "sandboxmanager", "x": 32.0, "pool": 0, "calls": 120, "errors": 0, "cps": 1.76, "acq50": 1.991, "acq95": 29.88, "e2e50": 2.569, "e2e95": 30.192, "stopped": "proc 0: a call in flight over 60s", "test": "Closed loop: 32 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode closed --workers 32 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-cold_w32", "mode": "closed-loop", "src": "agent-sandbox-cold", "x": 32.0, "pool": 0, "calls": 143, "errors": 0, "cps": 2.01, "acq50": 1.897, "acq95": 28.901, "e2e50": 2.23, "e2e95": 29.215, "stopped": "proc 0: a call in flight over 60s", "test": "Closed loop: 32 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 32 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-pool32_w04", "mode": "closed-loop", "src": "agent-sandbox-pool32", "x": 4.0, "pool": 32, "calls": 136, "errors": 0, "cps": 2.12, "acq50": 0.22, "acq95": 16.85, "e2e50": 0.644, "e2e95": 17.175, "stopped": "", "test": "Closed loop: 4 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 4 --duration 60 --warmup 15"}, {"cell": "closed-loop_agent-sandbox-pool32_w16", "mode": "closed-loop", "src": "agent-sandbox-pool32", "x": 16.0, "pool": 32, "calls": 186, "errors": 0, "cps": 2.52, "acq50": 0.378, "acq95": 29.781, "e2e50": 0.868, "e2e95": 30.123, "stopped": "", "test": "Closed loop: 16 workers, each starting its next call when the last ends; 60 s measured after a 15 s warm-up; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode closed --workers 16 --duration 60 --warmup 15"}, {"cell": "burst_agent-sandbox-cold_n32", "mode": "burst", "src": "agent-sandbox-cold", "x": 32.0, "pool": 0, "calls": 32, "errors": 0, "cps": 1.86, "acq50": 2.17, "acq95": 13.641, "e2e50": 2.508, "e2e95": 14.193, "stopped": "", "test": "Burst: 32 calls started at once; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode burst --calls 32"}, {"cell": "burst_sandboxmanager_n32", "mode": "burst", "src": "sandboxmanager", "x": 32.0, "pool": 0, "calls": 32, "errors": 0, "cps": 7.65, "acq50": 2.834, "acq95": 3.523, "e2e50": 3.309, "e2e95": 4.016, "stopped": "", "test": "Burst: 32 calls started at once", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode burst --calls 32"}, {"cell": "burst_agent-sandbox-pool32_n32", "mode": "burst", "src": "agent-sandbox-pool32", "x": 32.0, "pool": 32, "calls": 32, "errors": 0, "cps": 18.31, "acq50": 0.678, "acq95": 0.896, "e2e50": 1.271, "e2e95": 1.516, "stopped": "", "test": "Burst: 32 calls started at once; warm pool filled to 32 first", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode burst --calls 32"}, {"cell": "open-loop_sandboxmanager_r0.5", "mode": "open-loop", "src": "sandboxmanager", "x": 0.5, "pool": 0, "calls": 39, "errors": 0, "cps": 0.68, "acq50": 1.056, "acq95": 1.096, "e2e50": 1.467, "e2e95": 1.592, "stopped": "", "test": "Open loop: Poisson arrivals at 0.5 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 0.5 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_sandboxmanager_r1", "mode": "open-loop", "src": "sandboxmanager", "x": 1.0, "pool": 0, "calls": 70, "errors": 0, "cps": 1.02, "acq50": 1.054, "acq95": 14.406, "e2e50": 1.494, "e2e95": 14.877, "stopped": "", "test": "Open loop: Poisson arrivals at 1 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 1 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_sandboxmanager_r2", "mode": "open-loop", "src": "sandboxmanager", "x": 2.0, "pool": 0, "calls": 125, "errors": 0, "cps": 1.94, "acq50": 1.061, "acq95": 23.613, "e2e50": 1.502, "e2e95": 24.037, "stopped": "", "test": "Open loop: Poisson arrivals at 2 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up", "cmd": "toolcall_bench.py run --arm sandboxmanager --mode open --rate 2 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r0.5", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 0.5, "pool": 0, "calls": 39, "errors": 0, "cps": 0.69, "acq50": 0.464, "acq95": 1.454, "e2e50": 0.809, "e2e95": 1.837, "stopped": "", "test": "Open loop: Poisson arrivals at 0.5 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 0.5 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r1", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 1.0, "pool": 0, "calls": 70, "errors": 0, "cps": 1.01, "acq50": 0.424, "acq95": 13.748, "e2e50": 0.768, "e2e95": 14.066, "stopped": "", "test": "Open loop: Poisson arrivals at 1 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 1 --duration 60 --warmup 15 --max-inflight 64"}, {"cell": "open-loop_agent-sandbox-cold_r2", "mode": "open-loop", "src": "agent-sandbox-cold", "x": 2.0, "pool": 0, "calls": 125, "errors": 0, "cps": 1.78, "acq50": 0.531, "acq95": 15.227, "e2e50": 0.873, "e2e95": 15.59, "stopped": "", "test": "Open loop: Poisson arrivals at 2 calls/s, at most 64 in flight; 60 s measured after a 15 s warm-up; no warm pool (cold start)", "cmd": "toolcall_bench.py run --arm agent-sandbox --mode open --rate 2 --duration 60 --warmup 15 --max-inflight 64"}]}];
+
+const NAMES = {"sandboxmanager": "SandboxManager", "agent-sandbox-cold": "agent-sandbox, cold start",
+  "agent-sandbox-pool32": "agent-sandbox, pool 32", "agent-sandbox-pool16": "agent-sandbox, pool 16",
+  "agent-sandbox-pool8": "agent-sandbox, pool 8", "reuse": "agent-sandbox, reused"};
+const ORDER = Object.keys(NAMES);
+const color = src => `var(--s-${src})`;
+const NS = "http://www.w3.org/2000/svg";
+const el = (n, a = {}, t) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); if (t != null) e.textContent = t; return e; };
+const fmt = v => v == null ? "–" : (Math.round(v * 100) / 100).toString();
+const cells = (run, mode, src) => run.rows.filter(r => r.mode === mode && r.src === src).sort((a, b) => a.x - b.x);
+const name = (src, run) => NAMES[src] + (RUNS.length > 1 ? ` · ${run.label}` : "");
+
+function tipLines(title, pairs, test) {
+  const b = document.createElement("b"); b.textContent = title; const out = [b];
+  for (const [k, v] of pairs) { const d = document.createElement("div"); const m = document.createElement("span"); m.className = "m"; m.textContent = v; d.append(k + ": ", m); out.push(d); }
+  if (test) { const d = document.createElement("div"); d.className = "tt"; d.textContent = test; out.push(d); }
+  return out;
+}
+function frame(id, { xs, xLabel, yMax, yLabel, yTicks, logX, H = 260 }) {
+  const host = document.getElementById(id);
+  const W = 520, M = { l: 48, r: 16, t: 14, b: 40 }, iw = W - M.l - M.r, ih = H - M.t - M.b;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  const lx = v => logX ? Math.log2(v) : v, x0 = lx(xs[0]), x1 = lx(xs[xs.length - 1]);
+  const x = v => M.l + ((lx(v) - x0) / ((x1 - x0) || 1)) * iw, y = v => M.t + ih - (v / yMax) * ih;
+  for (const t of yTicks) { svg.append(el("line", { class: "gl", x1: M.l, x2: W - M.r, y1: y(t), y2: y(t) })); svg.append(el("text", { class: "ax", x: M.l - 8, y: y(t) + 4, "text-anchor": "end" }, String(t))); }
+  svg.append(el("line", { class: "base", x1: M.l, x2: W - M.r, y1: y(0), y2: y(0) }));
+  for (const v of xs) svg.append(el("text", { class: "ax", x: x(v), y: H - M.b + 16, "text-anchor": "middle" }, String(v)));
+  svg.append(el("text", { class: "axt", x: M.l + iw / 2, y: H - 6, "text-anchor": "middle" }, xLabel));
+  svg.append(el("text", { class: "axt", x: 12, y: M.t + ih / 2, transform: `rotate(-90 12 ${M.t + ih / 2})`, "text-anchor": "middle" }, yLabel));
+  host.append(svg);
+  const tip = document.createElement("div"); tip.className = "tip"; host.append(tip);
+  const show = (e, lines) => { tip.replaceChildren(...lines); tip.style.display = "block"; const r = host.getBoundingClientRect(), tw = tip.offsetWidth;
+    let left = e.clientX - r.left + 12; if (left + tw > r.width) left = e.clientX - r.left - tw - 12; tip.style.left = Math.max(0, left) + "px"; tip.style.top = (e.clientY - r.top - 10) + "px"; };
+  return { svg, x, y, M, W, H, iw, show, hide: () => { tip.style.display = "none"; } };
+}
+function lines(f, series, val, xName, pairs) {
+  for (const s of series) {
+    const pts = s.rows.filter(r => val(r) != null).map(r => [f.x(r.x), f.y(val(r)), r]);
+    if (!pts.length) continue;
+    f.svg.append(el("path", { d: pts.map((p, i) => (i ? "L" : "M") + p[0] + " " + p[1]).join(" "), fill: "none", stroke: color(s.src), "stroke-width": 2, "stroke-dasharray": s.dash ? "6 4" : "none" }));
+    for (const [px, py, r] of pts) {
+      f.svg.append(el("circle", { cx: px, cy: py, r: 4, fill: s.dash ? "var(--panel)" : color(s.src), stroke: s.dash ? color(s.src) : "var(--panel)", "stroke-width": 2 }));
+      const hit = el("circle", { cx: px, cy: py, r: 11, fill: "transparent" });
+      hit.addEventListener("mousemove", e => f.show(e, tipLines(`${s.name} · ${xName(r)}`, pairs ? pairs(r) : [["calls/s", fmt(r.cps)], ["acquire p50", fmt(r.acq50) + " s"], ["e2e p95", fmt(r.e2e95) + " s"]], r.test)));
+      hit.addEventListener("mouseleave", f.hide); f.svg.append(hit);
+    }
+  }
+}
+function legend(id, series) {
+  const box = document.getElementById(id);
+  for (const s of series) { const sp = document.createElement("span"); const i = document.createElement("i"); i.style.borderTopColor = color(s.src); if (s.dash) i.className = "dash"; sp.append(i, s.name); box.append(sp); }
+}
+function seriesFor(mode, srcs) {
+  const out = [];
+  for (const run of RUNS) for (const src of srcs) { const rows = cells(run, mode, src); if (rows.length) out.push({ src, rows, dash: run.dash, name: name(src, run) }); }
+  return out;
+}
+const niceMax = v => { const s = [1, 2, 2.5, 3, 5, 10, 12, 15, 20, 25, 30, 40, 50, 60, 80, 100, 110, 150, 200]; return s.find(x => x >= v * 1.05) || Math.ceil(v * 1.1); };
+const ticks = m => { const step = m <= 3 ? 1 : m <= 12 ? 2 : m <= 30 ? 5 : m <= 60 ? 10 : m <= 120 ? 25 : 50; const t = []; for (let v = 0; v <= m + 1e-9; v += step) t.push(+v.toFixed(2)); return t; };
+function hidePanel(id) { document.getElementById(id).closest(".panel").hidden = true; }
+
+function closedChart(id, legendId, val, yLabel, srcs, band) {
+  const series = seriesFor("closed-loop", srcs);
+  if (!series.length) return hidePanel(id);
+  const xs = [...new Set(series.flatMap(s => s.rows.map(r => r.x)))].sort((a, b) => a - b);
+  const yMax = niceMax(Math.max(...series.flatMap(s => s.rows.map(val)).filter(v => v != null), band ? 2.5 : 0));
+  const f = frame(id, { xs, logX: true, xLabel: "workers (log scale)", yMax, yLabel, yTicks: ticks(yMax) });
+  if (band) { f.svg.insertBefore(el("rect", { class: "band", x: f.M.l, width: f.iw, y: f.y(2.5), height: f.y(2) - f.y(2.5) }), f.svg.firstChild); f.svg.append(el("text", { class: "bandt", x: f.M.l + 6, y: f.y(2.5) - 5 }, "observed cluster ceiling ~2–2.5/s")); }
+  lines(f, series, val, r => `${r.x} workers`);
+  legend(legendId, series);
+}
+function reuseChart(id) {
+  const series = seriesFor("closed-loop", ["reuse"]);
+  if (!series.length) return hidePanel(id);
+  const xs = series[0].rows.map(r => r.x), yMax = niceMax(Math.max(...xs.map(w => w / 0.3)));
+  const f = frame(id, { xs, logX: true, xLabel: "workers (log scale)", yMax, yLabel: "tool calls / s", yTicks: ticks(yMax) });
+  f.svg.append(el("path", { class: "ref", d: xs.map((w, i) => (i ? "L" : "M") + f.x(w) + " " + f.y(w / 0.3)).join(" ") }));
+  lines(f, series, r => r.cps, r => `${r.x} workers`);
+}
+function burstChart(id) {
+  const bars = [];
+  for (const run of RUNS) for (const r of run.rows.filter(r => r.mode === "burst").sort((a, b) => ORDER.indexOf(a.src) - ORDER.indexOf(b.src) || a.x - b.x))
+    bars.push({ r, run, label: `${r.x} calls · ${NAMES[r.src]}` + (RUNS.length > 1 ? ` · ${run.label}` : "") });
+  if (!bars.length) return hidePanel(id);
+  const host = document.getElementById(id), W = 520, rowH = 34, M = { l: 230, r: 64, t: 6, b: 30 }, H = M.t + bars.length * rowH + M.b;
+  const max = niceMax(Math.max(...bars.map(b => b.r.cps))), x = v => M.l + (v / max) * (W - M.l - M.r);
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  for (const t of ticks(max)) { svg.append(el("line", { class: "gl", x1: x(t), x2: x(t), y1: M.t, y2: H - M.b })); svg.append(el("text", { class: "ax", x: x(t), y: H - M.b + 16, "text-anchor": "middle" }, String(t))); }
+  svg.append(el("text", { class: "axt", x: x(max / 2), y: H - 2, "text-anchor": "middle" }, "tool calls / s"));
+  host.append(svg); const tip = document.createElement("div"); tip.className = "tip"; host.append(tip);
+  bars.forEach((b, i) => {
+    const yy = M.t + i * rowH + 7, r = b.r;
+    svg.append(el("text", { class: "axt", x: M.l - 10, y: yy + 13, "text-anchor": "end" }, b.label));
+    svg.append(el("rect", { x: M.l, y: yy, width: Math.max(4, x(r.cps) - M.l), height: 18, rx: 4, fill: b.run.dash ? "var(--panel)" : color(r.src), stroke: color(r.src), "stroke-width": b.run.dash ? 2 : 0, "stroke-dasharray": b.run.dash ? "5 3" : "none" }));
+    svg.append(el("text", { class: "lbl", x: x(r.cps) + 6, y: yy + 13 }, `${fmt(r.cps)}/s`));
+    const hit = el("rect", { x: 0, y: yy - 6, width: W, height: rowH - 4, fill: "transparent" });
+    hit.addEventListener("mousemove", e => { tip.replaceChildren(...tipLines(b.label, [["calls/s", fmt(r.cps)], ["acquire p50", fmt(r.acq50) + " s"], ["e2e p95", fmt(r.e2e95) + " s"]], r.test));
+      tip.style.display = "block"; const bb = host.getBoundingClientRect(); tip.style.left = Math.min(e.clientX - bb.left + 12, bb.width - tip.offsetWidth) + "px"; tip.style.top = (e.clientY - bb.top - 10) + "px"; });
+    hit.addEventListener("mouseleave", () => { tip.style.display = "none"; }); svg.append(hit);
+  });
+}
+function openChart(id, legendId) {
+  const series = seriesFor("open-loop", ORDER);
+  if (!series.length) return hidePanel(id);
+  const xMax = Math.max(...series.flatMap(s => s.rows.map(r => r.x))), yMax = niceMax(Math.max(xMax, ...series.flatMap(s => s.rows.map(r => r.cps)))), m = Math.max(xMax, yMax);
+  const xs = [...new Set(series.flatMap(s => s.rows.map(r => r.x)))].sort((a, b) => a - b);
+  const f = frame(id, { xs: [0, ...xs], xLabel: "offered rate (calls / s)", yMax, yLabel: "delivered (calls / s)", yTicks: ticks(yMax) });
+  f.svg.append(el("path", { class: "ref", d: `M${f.x(0)} ${f.y(0)} L${f.x(xMax)} ${f.y(Math.min(xMax, yMax))}` }));
+  f.svg.append(el("path", { class: "ref half", d: `M${f.x(0)} ${f.y(0)} L${f.x(xMax)} ${f.y(xMax / 2)}` }));
+  f.svg.append(el("text", { class: "reft", x: f.x(xMax) - 4, y: f.y(xMax / 2) + 14, "text-anchor": "end" }, "50% of offered"));
+  lines(f, series, r => r.cps, r => `offered ${r.x}/s`);
+  legend(legendId, series);
+}
+function errChart(id, legendId) {
+  const series = seriesFor("open-loop", ORDER).map(s => ({ ...s, rows: s.rows.map(r => ({ ...r, err: r.calls ? 100 * r.errors / r.calls : 0 })) }));
+  if (!series.length) return hidePanel(id);
+  const xs = [...new Set(series.flatMap(s => s.rows.map(r => r.x)))].sort((a, b) => a - b);
+  const yMax = niceMax(Math.max(6, ...series.flatMap(s => s.rows.map(r => r.err))));
+  const f = frame(id, { xs: [0, ...xs], xLabel: "offered rate (calls / s)", yMax, yLabel: "calls failed or dropped (%)", yTicks: ticks(yMax) });
+  f.svg.append(el("path", { class: "ref", d: `M${f.x(0)} ${f.y(5)} L${f.x(xs[xs.length - 1])} ${f.y(5)}` }));
+  f.svg.append(el("text", { class: "reft", x: f.M.l + 6, y: f.y(5) - 5 }, "stop rule: over 5% in the last 30 s"));
+  lines(f, series, r => r.err, r => `offered ${r.x}/s`, r => [["errors", `${r.errors} of ${r.calls} (${fmt(r.err)}%)`], ["delivered", fmt(r.cps) + "/s"]]);
+  legend(legendId, series);
+}
+function table(id) {
+  const tb = document.getElementById(id);
+  const head = tb.closest("table").querySelector("thead tr");
+  if (RUNS.length > 1) { const th = document.createElement("th"); th.textContent = "Run"; head.insertBefore(th, head.children[1]); }
+  for (const [title, mode] of [["Closed loop", "closed-loop"], ["Bursts", "burst"], ["Open loop (rate sweeps)", "open-loop"]]) {
+    const rows = RUNS.flatMap(run => run.rows.filter(r => r.mode === mode).map(r => [run, r]))
+      .sort((a, b) => ORDER.indexOf(a[1].src) - ORDER.indexOf(b[1].src) || a[1].x - b[1].x || RUNS.indexOf(a[0]) - RUNS.indexOf(b[0]));
+    if (!rows.length) continue;
+    const g = document.createElement("tr"); g.className = "group"; const gt = document.createElement("td"); gt.colSpan = RUNS.length > 1 ? 12 : 11; gt.textContent = title; g.append(gt); tb.append(g);
+    for (const [run, r] of rows) {
+      const tr = document.createElement("tr"), c = document.createElement("td"), sw = document.createElement("span");
+      sw.className = "sw"; sw.style.background = color(r.src); c.append(sw, r.cell); tr.append(c);
+      if (RUNS.length > 1) { const t = document.createElement("td"); t.textContent = run.label; tr.append(t); }
+      const tc = document.createElement("td"); tc.className = "test"; tc.append(r.test || "–");
+      if (r.cmd) { const code = document.createElement("code"); code.textContent = r.cmd; tc.append(code); }
+      tr.append(tc);
+      for (const v of [r.pool, r.calls, r.errors, fmt(r.cps), fmt(r.acq50), fmt(r.acq95), fmt(r.e2e50), fmt(r.e2e95)]) { const td = document.createElement("td"); td.className = "n"; td.textContent = String(v); tr.append(td); }
+      const st = document.createElement("td"); st.textContent = r.stopped ? "yes" : ""; st.title = r.stopped; tr.append(st);
+      tb.append(tr);
+    }
+  }
+}
+const CREATING = ORDER.filter(s => s !== "reuse");
+closedChart("c-throughput", "l-throughput", r => r.cps, "tool calls / s", CREATING, true);
+closedChart("c-acquire", "l-acquire", r => r.acq50, "acquire p50 (s)", CREATING, false);
+reuseChart("c-reuse");
+burstChart("c-burst");
+openChart("c-open", "l-open");
+errChart("c-err", "l-err");
+closedChart("c-tail", "l-tail", r => r.e2e95, "end-to-end p95 (s)", ["sandboxmanager", "agent-sandbox-cold"], false);
+table("rows");
+</script>

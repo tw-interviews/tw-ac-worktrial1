@@ -2,10 +2,11 @@
 # 5 x c7i-flex.large, 2 vCPU / 29 pods each). About 88 pod slots are free for
 # sandboxes, and on nodes without prefix delegation the per-node pod-IP supply
 # caps one-sandbox-per-call at ~2-2.5 calls/s, so the grid stops at 32 workers,
-# pools of 32 and rates of 6/s.
+# pools of 32 and rates of 8/s (by then every arm has degraded past 50%).
 
 API_REPLICAS=4       # the benchmark's SandboxManager; fewer replicas free pod slots
 MAX_INFLIGHT=64      # open-loop cap on concurrent calls
+SWEEP_FLOOR=0.5      # open-loop sweeps run until delivered < 50% of offered
 
 grid_quick() {       # ~10 minutes: does every arm work end to end?
   DUR=15 WARM=5
@@ -26,9 +27,9 @@ grid_full() {        # ~1.5-2 hours
   for d in 8 16 32; do burst agent-sandbox "$d" "$d"; done
   burst agent-sandbox 0 32
   burst sandboxmanager 0 32
-  open_sweep sandboxmanager 0 0.5 1 2 3 4 6
-  open_sweep agent-sandbox 0 0.5 1 2 3 4 6
-  open_sweep agent-sandbox 32 0.5 1 2 3 4 6
+  open_sweep sandboxmanager 0 0.5 1 2 3 4 6 8
+  open_sweep agent-sandbox 0 0.5 1 2 3 4 6 8
+  open_sweep agent-sandbox 32 0.5 1 2 3 4 6 8
 }
 
 grid_startup() {     # ~35 minutes: the cells sandbox startup time affects
@@ -40,6 +41,13 @@ grid_startup() {     # ~35 minutes: the cells sandbox startup time affects
   burst agent-sandbox 0 32
   burst sandboxmanager 0 32
   burst agent-sandbox 32 32
-  open_sweep sandboxmanager 0 0.5 1 2 3 4 6
-  open_sweep agent-sandbox 0 0.5 1 2 3 4 6
+  open_sweep sandboxmanager 0 0.5 1 2 3 4 6 8
+  open_sweep agent-sandbox 0 0.5 1 2 3 4 6 8
+}
+
+grid_open() {        # ~1 hour: the sustained-load sweeps alone
+  DUR=60 WARM=15
+  open_sweep sandboxmanager 0 0.5 1 2 3 4 6 8
+  open_sweep agent-sandbox 0 0.5 1 2 3 4 6 8
+  open_sweep agent-sandbox 32 0.5 1 2 3 4 6 8
 }

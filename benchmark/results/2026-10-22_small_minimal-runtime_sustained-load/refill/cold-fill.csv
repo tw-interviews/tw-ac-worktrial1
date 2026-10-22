@@ -1,0 +1,5 @@
+t,pool_ready,pods_running,pods_pending,pods_terminating
+0.0,0,1,36,0
+1.26,8,21,29,0
+2.5,49,50,0,0
+3.75,50,50,0,0

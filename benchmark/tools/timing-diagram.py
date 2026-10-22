@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Draw a cell's measured tool calls as a Mermaid timing (Gantt) diagram.
 
-    tools/timing-diagram.py RAW_JSONL_GZ [--window S] [--worker N] [--title TEXT]
+    tools/timing-diagram.py RAW_JSONL_GZ [--window S] [--worker N | --lanes] [--title TEXT]
 
-One row per worker (or only worker N); each call is three bars: acquire (crit), tool (active) and
+One row per worker (or only worker N); with --lanes (for open-loop runs, where
+every call is its own worker) calls are packed into rows of concurrent calls
+instead, so the number of rows is the peak in flight. Each call is three bars: acquire (crit), tool (active) and
 release (done). Takes the calls that start within the first --window seconds
 after warm-up; bars running past the chart's end (window + 25%) are cut there,
 and the title says how many. Times are seconds from the first measured call.
@@ -17,6 +19,7 @@ p = argparse.ArgumentParser()
 p.add_argument("raw")
 p.add_argument("--window", type=float, default=12)
 p.add_argument("--worker", type=int, help="draw only this worker")
+p.add_argument("--lanes", action="store_true", help="pack calls into rows by concurrency")
 p.add_argument("--title", default="")
 a = p.parse_args()
 
@@ -27,6 +30,13 @@ if a.worker is not None:
     calls = [c for c in calls if c["worker"] == a.worker]
 end = a.window * 1.25
 shown = sorted((c for c in calls if c["t_start"] - t0 < a.window), key=lambda c: (c["worker"], c["t_start"]))
+if a.lanes:
+    free = []  # free[i]: when row i's last call was released
+    for c in sorted(shown, key=lambda c: c["t_start"]):
+        i = next((i for i, f in enumerate(free) if f <= c["t_start"]), len(free))
+        free[i:i + 1] = [c["t_released"]]
+        c["worker"] = i + 1
+    shown.sort(key=lambda c: (c["worker"], c["t_start"]))
 cut = sum(1 for c in shown if c["t_released"] - t0 > end)
 
 
@@ -40,7 +50,7 @@ title = a.title + (f" ({cut} call{'s' if cut != 1 else ''} cut off at {end:g} s)
 out = ["gantt", f"    title {title}", "    dateFormat YYYY-MM-DD HH:mm:ss.SSS",
        "    axisFormat %S s", f"    tickInterval {'1second' if end <= 5 else '2second'}"]
 for w in sorted({c["worker"] for c in shown}):
-    out.append(f"    section worker {w}")
+    out.append(f"    section {'in flight' if a.lanes else 'worker'} {w}")
     for c in (c for c in shown if c["worker"] == w):
         for label, tag, s, e in (("acquire", "crit", c["t_start"], c["t_acquired"]),
                                  ("tool", "active", c["t_acquired"], c["t_tool_done"]),

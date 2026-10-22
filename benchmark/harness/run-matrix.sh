@@ -9,6 +9,7 @@
 #   full     the profile's matrix
 #   startup  only the cells where sandbox startup matters (rerun after
 #            changing the runtime image)
+#   open     only the open-loop (sustained load) sweeps
 #
 # Copies toolcall_bench.py into the loadgen pod, scales the benchmark's
 # SandboxManager to the profile's API_REPLICAS, applies the agent-sandbox
@@ -109,19 +110,21 @@ closed() { # ARM DEPTH W
 burst() { # ARM DEPTH N
   cell "burst_$(label "$1" "$2")_n$(printf %02d "$3")" "$2" --arm "$1" --mode burst --calls "$3"
 }
-# open_sweep ARM DEPTH RATES...: step the arrival rate up; stop after the
-# first rate delivered below 90% of offered or that trips a stop rule.
+# open_sweep ARM DEPTH RATES...: step the arrival rate up until delivered
+# throughput falls below SWEEP_FLOOR (default 0.5, i.e. 50% degradation) of the
+# offered rate. A cell a stop rule ended early still counts, judged on the
+# calls it delivered before the stop; it doesn't end the sweep by itself.
 open_sweep() {
   local arm=$1 depth=$2; shift 2
   for rate in "$@"; do
     cell "open-loop_$(label "$arm" "$depth")_r$rate" "$depth" --arm "$arm" --mode open --rate "$rate" \
       --duration "$DUR" --warmup "$WARM" --max-inflight "$MAX_INFLIGHT"
-    if python3 - "$OUT/summary.jsonl" "$rate" <<'PY'
+    if python3 - "$OUT/summary.jsonl" "$rate" "${SWEEP_FLOOR:-0.5}" <<'PY'
 import json, sys
 s = json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])
-sys.exit(0 if s.get("stopped") or (s.get("tool_calls_per_s") or 0) < 0.9 * float(sys.argv[2]) else 1)
+sys.exit(0 if (s.get("tool_calls_per_s") or 0) < float(sys.argv[3]) * float(sys.argv[2]) else 1)
 PY
-    then log "sweep $(label "$arm" "$depth"): ceiling reached at offered rate $rate"; break; fi
+    then log "sweep $(label "$arm" "$depth"): delivered below ${SWEEP_FLOOR:-0.5} x offered at rate $rate"; break; fi
   done
 }
 
